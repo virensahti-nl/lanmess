@@ -26,7 +26,7 @@ You type the group code once. From now on you unlock with your PIN.
 - `Ctrl+Z` opens a modal with your current add code and countdown.
 - `?` opens help. `Ctrl+L` locks. `Ctrl+Q` quits.
 
-## Security model (v1.1.6)
+## Security model (v1.1.7)
 
 - Per-session X25519 handshake with fresh ephemerals both sides.
 - Symmetric hash ratchet per message (forward secrecy within a session).
