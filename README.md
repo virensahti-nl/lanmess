@@ -22,11 +22,11 @@ You type the group code once. From now on you unlock with your PIN.
 
 - Sidebar shows contacts with unread badges `(3)`, verified markers `*`, and state tags `[active]`, `[chat req]`, `[BLOCKED]`.
 - Chat pane shows the conversation, a `[UNVERIFIED]` warning if applicable, a status line, and the message input.
-- `M` opens a menu with every action.
-- `Ctrl+Z` opens a modal with the current login code and countdown.
+- `M` opens a sectioned menu (Chat / History / Session / System).
+- `Ctrl+Z` opens a modal with your current add code and countdown.
 - `?` opens help. `Ctrl+L` locks. `Ctrl+Q` quits.
 
-## Security model (v1.1.5)
+## Security model (v1.1.6)
 
 - Per-session X25519 handshake with fresh ephemerals both sides.
 - Symmetric hash ratchet per message (forward secrecy within a session).
@@ -39,8 +39,8 @@ You type the group code once. From now on you unlock with your PIN.
 
 ## Migrating
 
-From v1.1.3 / v1.1.4: enter your PIN. Everything re-encrypts under a fresh
-random master and the audit log is created. Nothing lost.
+From v1.1.3 / v1.1.4 / v1.1.5: enter your PIN. Everything re-encrypts under a
+fresh random master if needed and the audit log is created. Nothing lost.
 
 From v1.1.2: enter your old group code once plus a new PIN.
 

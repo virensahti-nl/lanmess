@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lanmess"
-version = "1.1.6"
+version = "1.1.7"
 description = "LAN-only end-to-end encrypted messenger with a TUI"
 readme = "README.md"
 license = "MIT"
