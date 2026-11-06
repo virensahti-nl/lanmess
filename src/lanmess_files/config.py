@@ -1,0 +1,60 @@
+from pathlib import Path
+
+APP_NAME = "LANMess"
+APP_VERSION = "1.1.6"
+DISCOVERY_PORT = 50505
+DISCOVERY_INTERVAL = 2.0
+DISCOVERY_TTL = 15.0
+TCP_PORT_RANGE = (50510, 50600)
+LOGIN_CODE_PERIOD = 60
+LOGIN_CODE_DIGITS = 8
+PBKDF2_ITERATIONS = 600_000
+GROUP_SALT = b"lanmess-group-key-v1"
+LOOKUP_SALT = b"lanmess-lookup-v1"
+AUDIT_KEY_LABEL = b"lanmess-audit-key-v1"
+AUDIT_AAD_PREFIX = b"audit:"
+AUDIT_GENESIS_HMAC = "0" * 64
+PIN_MIN_LEN = 12
+PIN_MAX_LEN = 128
+ARGON2_TIME_COST = 3
+ARGON2_MEMORY_COST = 64 * 1024
+ARGON2_PARALLELISM = 4
+PIN_SALT_BYTES = 16
+VAULT_VERSION = 1
+VAULT_KDF_ID = "argon2id-v1"
+VAULT_AAD = b"lanmess-vault-v1"
+SESSION_INFO = b"lanmess-session-v1"
+CHAIN_MSG_LABEL = b"\x02"
+CHAIN_NEXT_LABEL = b"\x01"
+PAD_BLOCK = 256
+SAFETY_NUMBER_DIGITS = 60
+REQUEST_TIMEOUT = 6.0
+STOP_TIMEOUT = 2.0
+REPLAY_WINDOW_SECONDS = 60
+MAX_MESSAGE_LEN = 8192
+MIN_GROUP_CODE_LEN = 12
+MAX_GROUP_CODE_LEN = 256
+MAX_FRAME_SIZE = 64 * 1024
+ADD_RATE_LIMIT_SECONDS = 0.5
+MSG_RATE_LIMIT_SECONDS = 0.05
+ADD_RATE_LIMIT_MAX = 4096
+MSG_RATE_LIMIT_MAX = 4096
+MAX_SERVER_CONNECTIONS = 64
+CONTROL_SIG_PREFIX = b"LANMESS-CONTROL-v3:"
+UNREAD_MAX = 99
+SEARCH_WAIT_SECONDS = 2.0
+BASE_DIR = Path.home() / ".lanmess"
+DB_PATH = BASE_DIR / "lanmess.db"
+
+
+def ensure_dirs():
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        BASE_DIR.chmod(0o700)
+    except Exception:
+        pass
+    if DB_PATH.exists():
+        try:
+            DB_PATH.chmod(0o600)
+        except Exception:
+            pass
