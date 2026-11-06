@@ -117,6 +117,77 @@ def _check_pin_strength(pin):
     return None
 
 
+def _valid_port(s):
+    if not isinstance(s, str):
+        return False
+    if not s.isdigit():
+        return False
+    n = int(s)
+    return 1 <= n <= 65535
+
+
+def _valid_ipv4(s):
+    if not isinstance(s, str):
+        return False
+    parts = s.split(".")
+    if len(parts) != 4:
+        return False
+    for p in parts:
+        if not p.isdigit():
+            return False
+        n = int(p)
+        if not (0 <= n <= 255):
+            return False
+    return True
+
+
+def get_local_ips():
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ips.append(s.getsockname()[0])
+        finally:
+            s.close()
+    except Exception:
+        pass
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if "inet" in parts:
+                    idx = parts.index("inet")
+                    if idx + 1 < len(parts):
+                        addr = parts[idx + 1].split("/")[0]
+                        if (
+                            not addr.startswith("127.")
+                            and addr not in ips
+                        ):
+                            ips.append(addr)
+    except Exception:
+        pass
+    try:
+        hostname = socket.gethostname()
+        for info in socket.getaddrinfo(
+            hostname, None, socket.AF_INET
+        ):
+            addr = info[4][0]
+            if addr not in ips and not addr.startswith("127."):
+                ips.append(addr)
+    except Exception:
+        pass
+    return ips or ["127.0.0.1"]
+
+
 class ConfirmScreen(ModalScreen):
     CSS = """
     ConfirmScreen { align: center middle; }
@@ -246,6 +317,176 @@ class AddCodeScreen(ModalScreen):
         self.dismiss()
 
 
+class AddByIpScreen(ModalScreen):
+    CSS = """
+    AddByIpScreen { align: center middle; }
+    #addip-box {
+        width: 60;
+        height: auto;
+        border: thick $accent;
+        padding: 2 3;
+        background: $surface;
+    }
+    #addip-title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        padding: 0 0 1 0;
+    }
+    #addip-note {
+        color: $text-muted;
+        padding: 0 0 1 0;
+        text-align: center;
+    }
+    AddByIpScreen Input { margin: 0 0 1 0; }
+    #addip-error {
+        color: $error;
+        height: auto;
+        padding: 0 0 1 0;
+        text-align: center;
+    }
+    AddByIpScreen Button {
+        width: 100%;
+        margin: 0 0 1 0;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Container(id="addip-box"):
+            yield Static("Add by IP", id="addip-title")
+            yield Static(
+                "Enter the peer's address and the "
+                "8-digit code they show under "
+                "Show add code.",
+                id="addip-note",
+            )
+            yield Input(
+                placeholder="IP (e.g. 192.168.1.42)",
+                id="addip-ip",
+            )
+            yield Input(
+                placeholder="Port (e.g. 50510)",
+                id="addip-port",
+            )
+            yield Input(
+                placeholder="8-digit add code",
+                id="addip-code",
+                max_length=8,
+            )
+            yield Static("", id="addip-error")
+            yield Button(
+                "Add", id="addip-add", variant="primary"
+            )
+            yield Button(
+                "Cancel", id="addip-cancel", variant="default"
+            )
+
+    def _set_error(self, msg):
+        try:
+            self.query_one(
+                "#addip-error", Static
+            ).update(msg)
+        except Exception:
+            pass
+
+    def on_button_pressed(self, event):
+        if event.button.id == "addip-cancel":
+            self.dismiss(None)
+            return
+        if event.button.id != "addip-add":
+            return
+        ip = self.query_one("#addip-ip", Input).value.strip()
+        port_str = self.query_one(
+            "#addip-port", Input
+        ).value.strip()
+        code = self.query_one(
+            "#addip-code", Input
+        ).value.strip()
+        if not _valid_ipv4(ip):
+            self._set_error("Invalid IPv4 address.")
+            return
+        if not _valid_port(port_str):
+            self._set_error("Port must be 1-65535.")
+            return
+        if len(code) != 8 or not code.isdigit():
+            self._set_error("Code must be exactly 8 digits.")
+            return
+        self.dismiss((ip, int(port_str), code))
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
+class MyAddressScreen(ModalScreen):
+    CSS = """
+    MyAddressScreen { align: center middle; }
+    #addr-box {
+        width: 60;
+        height: auto;
+        border: thick $accent;
+        padding: 2 3;
+        background: $surface;
+    }
+    #addr-title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        padding: 0 0 1 0;
+    }
+    .addr-line {
+        text-align: center;
+        text-style: bold;
+        color: $success;
+        padding: 0 0 1 0;
+    }
+    #addr-note {
+        color: $text-muted;
+        padding: 1 0;
+        text-align: center;
+    }
+    #addr-close { width: 100%; }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Close", show=False),
+    ]
+
+    def __init__(self, ips, port):
+        super().__init__()
+        self.ips = ips
+        self.port = port
+
+    def compose(self) -> ComposeResult:
+        with Container(id="addr-box"):
+            yield Static("My Address", id="addr-title")
+            for i, ip in enumerate(self.ips):
+                yield Static(
+                    f"{ip}:{self.port}",
+                    id=f"addr-line-{i}",
+                    classes="addr-line",
+                )
+            yield Static(
+                "Share one of these addresses together "
+                "with the code from 'Show add code' so "
+                "the other person can add you by IP.",
+                id="addr-note",
+            )
+            yield Button(
+                "Close", id="addr-close", variant="primary"
+            )
+
+    def on_button_pressed(self, event):
+        if event.button.id == "addr-close":
+            self.dismiss()
+
+    def action_close(self):
+        self.dismiss()
+
+
 class MenuScreen(ModalScreen):
     CSS = """
     MenuScreen { align: center middle; }
@@ -313,6 +554,10 @@ class MenuScreen(ModalScreen):
                     "Verify contact (V)",
                     id="m-verify",
                 )
+                yield Button(
+                    "Add by IP (I)",
+                    id="m-addip",
+                )
                 yield Static("History", classes="menu-section")
                 yield Button(
                     "Clear local history (C)",
@@ -328,6 +573,10 @@ class MenuScreen(ModalScreen):
                     variant="error",
                 )
                 yield Static("Session", classes="menu-section")
+                yield Button(
+                    "Show my address",
+                    id="m-address",
+                )
                 yield Button(
                     "Show add code (Ctrl+Z)",
                     id="m-code",
@@ -482,6 +731,8 @@ class HelpScreen(ModalScreen):
                 "Commands:\n"
                 "  /help      Show this help\n"
                 "  /menu      Open the action menu\n"
+                "  /addip     Add by IP and port\n"
+                "  /address   Show your IPs and port\n"
                 "  /code      Show your add code\n"
                 "  /verify    Show safety number\n"
                 "  /clear     Clear local history\n"
@@ -492,6 +743,7 @@ class HelpScreen(ModalScreen):
                 "\n"
                 "Keys:\n"
                 "  M          Open menu\n"
+                "  I          Add by IP\n"
                 "  Ctrl+Z     Show add code\n"
                 "  Ctrl+L     Lock\n"
                 "  Ctrl+Q     Quit\n"
@@ -499,7 +751,13 @@ class HelpScreen(ModalScreen):
                 "  A/S/Y/X    Add/Start/Accept/Reject\n"
                 "  C/D/T/V    Clear/Delete/Stop/Verify\n"
                 "\n"
-                "Security (v1.1.6):\n"
+                "Adding contacts:\n"
+                "  By code works when both devices share\n"
+                "  a broadcast domain. By IP works on\n"
+                "  any routed network - enter the peer's\n"
+                "  address and current add code.\n"
+                "\n"
+                "Security (v1.1.8):\n"
                 "  Per-session X25519 + hash ratchet.\n"
                 "  Ed25519 signatures on every frame.\n"
                 "  256-byte padding on messages.\n"
@@ -619,7 +877,7 @@ class StartupScreen(Screen):
                 )
             elif self.state == "needs_vault":
                 yield Static(
-                    "Migrating to v1.1.6. Enter your old "
+                    "Migrating to v1.1.8. Enter your old "
                     "group code once, then choose a PIN.",
                     id="startup-note",
                 )
@@ -916,6 +1174,7 @@ class MainScreen(Screen):
         Binding("question_mark", "help", "Help", show=True),
         Binding("ctrl+z", "show_code", "Code", show=True),
         Binding("a", "focus_add", "Add", show=False),
+        Binding("i", "add_by_ip", "AddIP", show=False),
         Binding("s", "start_chat", "Start", show=False),
         Binding("y", "accept", "Accept", show=False),
         Binding("x", "reject", "Reject", show=False),
@@ -1135,6 +1394,12 @@ class MainScreen(Screen):
         if name == "/menu":
             self.action_open_menu()
             return
+        if name == "/addip":
+            self.action_add_by_ip()
+            return
+        if name == "/address":
+            self.action_show_address()
+            return
         if name == "/code":
             self.action_show_code()
             return
@@ -1189,6 +1454,38 @@ class MainScreen(Screen):
     def action_focus_add(self):
         self.query_one("#add-code", Input).focus()
 
+    def action_add_by_ip(self):
+        def on_result(result):
+            if result is None:
+                return
+            ip, port, code = result
+            asyncio.create_task(
+                self._do_add_by_ip(ip, port, code)
+            )
+
+        self.app.push_screen(
+            AddByIpScreen(), callback=on_result
+        )
+
+    async def _do_add_by_ip(self, ip, port, code):
+        self.set_status("Adding by IP...")
+        try:
+            await self.app.add_contact_by_ip(
+                ip, port, code
+            )
+        except Exception as e:
+            self.app.notify(
+                f"Add failed: {e}", severity="error"
+            )
+        finally:
+            self.set_status("")
+
+    def action_show_address(self):
+        ips = get_local_ips()
+        self.app.push_screen(
+            MyAddressScreen(ips, self.app.tcp_port)
+        )
+
     def action_open_menu(self):
         self.app.push_screen(
             MenuScreen(),
@@ -1225,6 +1522,10 @@ class MainScreen(Screen):
                 self.action_lock()
             elif action == "reset":
                 self.action_reset_all()
+            elif action == "addip":
+                self.action_add_by_ip()
+            elif action == "address":
+                self.action_show_address()
         except Exception as e:
             self.app.notify(
                 f"Menu action failed: {e}",
@@ -1846,6 +2147,215 @@ class LanMessApp(App):
                     f"{contact_name} marked unverified."
                 )
 
+    def _build_add_request_payload(self, code):
+        challenge = os.urandom(32)
+        proof = hmac.new(
+            code.encode("utf-8"),
+            b"REQ"
+            + self.user_name.encode("utf-8")
+            + challenge,
+            hashlib.sha256,
+        ).digest()
+        fields = {
+            "type": "ADD_REQUEST",
+            "from_name": self.user_name,
+            "from_ed_pub": ed_public_to_bytes(
+                self.ed_public
+            ).hex(),
+            "from_x25519_pub": x25519_public_to_bytes(
+                self.x25519_public
+            ).hex(),
+            "from_port": self.tcp_port,
+            "challenge": base64.b64encode(
+                challenge
+            ).decode("ascii"),
+            "proof": proof.hex(),
+            "timestamp": _now_ms(),
+        }
+        return self._signed(fields)
+
+    async def _process_add_response(
+        self,
+        resp,
+        code,
+        peer_ip,
+        peer_port,
+        expected_found_name=None,
+    ):
+        if not resp:
+            self.notify(
+                "Add failed: unreachable.",
+                severity="error",
+            )
+            return False
+
+        resp_type = resp.get("type")
+        if resp_type == "ADD_REJECT":
+            reason = resp.get("reason", "rejected")
+            self.notify(
+                f"Add failed: {reason}",
+                severity="error",
+            )
+            self._audit(
+                "ADD_REJECTED",
+                {
+                    "contact": (
+                        expected_found_name or peer_ip
+                    ),
+                    "reason": reason,
+                },
+            )
+            return False
+        if resp_type not in ("ADD_ACCEPT", "ADD_PENDING"):
+            self.notify(
+                "Invalid peer response.",
+                severity="error",
+            )
+            return False
+
+        to_ed = resp.get("to_ed_pub", "")
+        to_x = resp.get("to_x25519_pub", "")
+        to_name = resp.get("to_name", "")
+        challenge_b64 = resp.get("challenge", "")
+        proof_hex = resp.get("proof", "")
+        ts = resp.get("timestamp")
+
+        if not self._valid_hex(to_ed, 32):
+            self.notify(
+                "Invalid peer key.", severity="error"
+            )
+            return False
+        if not self._valid_hex(to_x, 32):
+            self.notify(
+                "Invalid peer key.", severity="error"
+            )
+            return False
+        if not self._valid_name(to_name):
+            self.notify(
+                "Invalid peer name.", severity="error"
+            )
+            return False
+        if to_name == self.user_name:
+            self.notify(
+                "Cannot add yourself.", severity="error"
+            )
+            return False
+        if not self._valid_timestamp(ts):
+            self.notify(
+                "Stale response.", severity="error"
+            )
+            return False
+
+        try:
+            resp_challenge = base64.b64decode(
+                challenge_b64
+            )
+        except Exception:
+            self.notify(
+                "Invalid challenge.", severity="error"
+            )
+            return False
+        if len(resp_challenge) != 32:
+            self.notify(
+                "Invalid challenge.", severity="error"
+            )
+            return False
+
+        expected = hmac.new(
+            code.encode("utf-8"),
+            b"ACC"
+            + to_name.encode("utf-8")
+            + resp_challenge,
+            hashlib.sha256,
+        ).digest()
+        try:
+            given = bytes.fromhex(proof_hex)
+        except (TypeError, ValueError):
+            self.notify(
+                "Invalid proof.", severity="error"
+            )
+            return False
+        if not hmac.compare_digest(expected, given):
+            self.notify(
+                "Proof mismatch - wrong peer or "
+                "tampered response.",
+                severity="error",
+            )
+            self._audit(
+                "PROOF_MISMATCH",
+                {"peer_name": to_name},
+            )
+            return False
+
+        try:
+            peer_ed_pk = ed_public_from_bytes(
+                bytes.fromhex(to_ed)
+            )
+        except Exception:
+            self.notify(
+                "Invalid peer key.", severity="error"
+            )
+            return False
+        if not self._check_signed(resp, peer_ed_pk):
+            self.notify(
+                "Invalid response signature.",
+                severity="error",
+            )
+            return False
+
+        if (
+            expected_found_name is not None
+            and expected_found_name != to_name
+        ):
+            self.notify(
+                f"Name mismatch: expected "
+                f"{expected_found_name}, got {to_name}.",
+                severity="error",
+            )
+            return False
+
+        contact_name = expected_found_name or to_name
+
+        existing = self.db.get_contact(contact_name)
+        if (
+            existing
+            and existing["ed_public_hex"] != to_ed
+        ):
+            self.notify(
+                f"Key mismatch for {contact_name}. "
+                "Refusing to overwrite.",
+                severity="error",
+            )
+            return False
+
+        self.db.upsert_contact(
+            name=contact_name,
+            ip=peer_ip,
+            port=peer_port,
+            ed_public_hex=to_ed,
+            x25519_public_hex=to_x,
+        )
+        self._audit(
+            "ADD_REQUEST_SENT", {"contact": contact_name}
+        )
+
+        if resp_type == "ADD_ACCEPT":
+            self.db.set_contact_state(
+                contact_name, pending=0
+            )
+            self.notify(f"Added {contact_name}.")
+        else:
+            self.db.set_contact_state(
+                contact_name, pending=1
+            )
+            self.notify(
+                f"Request sent to {contact_name}. "
+                "Waiting for acceptance."
+            )
+        self._refresh_main()
+        self._refresh_visible_messages()
+        return True
+
     async def add_contact_by_code(self, code):
         tag = compute_secure_code_tag(
             self.lookup_key, code
@@ -1872,187 +2382,32 @@ class LanMessApp(App):
                 "No peer found with that code.",
                 severity="error",
             )
-            return
+            return False
 
         self.notify("Contacting peer...", timeout=2)
-        challenge = os.urandom(32)
-        proof = hmac.new(
-            code.encode("utf-8"),
-            b"REQ"
-            + self.user_name.encode("utf-8")
-            + challenge,
-            hashlib.sha256,
-        ).digest()
-
-        fields = {
-            "type": "ADD_REQUEST",
-            "from_name": self.user_name,
-            "from_ed_pub": ed_public_to_bytes(
-                self.ed_public
-            ).hex(),
-            "from_x25519_pub": x25519_public_to_bytes(
-                self.x25519_public
-            ).hex(),
-            "from_port": self.tcp_port,
-            "challenge": base64.b64encode(
-                challenge
-            ).decode("ascii"),
-            "proof": proof.hex(),
-            "timestamp": _now_ms(),
-        }
-        payload = self._signed(fields)
+        payload = self._build_add_request_payload(code)
         resp = await send_request(
             info["ip"], info["tcp_port"], payload
         )
-        if not resp:
-            self.notify(
-                "Add failed: unreachable.",
-                severity="error",
-            )
-            return
-
-        resp_type = resp.get("type")
-        if resp_type == "ADD_REJECT":
-            reason = resp.get("reason", "rejected")
-            self.notify(
-                f"Add failed: {reason}",
-                severity="error",
-            )
-            self._audit(
-                "ADD_REJECTED",
-                {"contact": found_name, "reason": reason},
-            )
-            return
-        if resp_type not in ("ADD_ACCEPT", "ADD_PENDING"):
-            self.notify(
-                "Invalid peer response.",
-                severity="error",
-            )
-            return
-
-        to_ed = resp.get("to_ed_pub", "")
-        to_x = resp.get("to_x25519_pub", "")
-        to_name = resp.get("to_name", "")
-        challenge_b64 = resp.get("challenge", "")
-        proof_hex = resp.get("proof", "")
-        ts = resp.get("timestamp")
-
-        if not self._valid_hex(to_ed, 32):
-            self.notify(
-                "Invalid peer key.", severity="error"
-            )
-            return
-        if not self._valid_hex(to_x, 32):
-            self.notify(
-                "Invalid peer key.", severity="error"
-            )
-            return
-        if not self._valid_name(to_name):
-            self.notify(
-                "Invalid peer name.", severity="error"
-            )
-            return
-        if not self._valid_timestamp(ts):
-            self.notify(
-                "Stale response.", severity="error"
-            )
-            return
-
-        try:
-            resp_challenge = base64.b64decode(
-                challenge_b64
-            )
-        except Exception:
-            self.notify(
-                "Invalid challenge.", severity="error"
-            )
-            return
-        if len(resp_challenge) != 32:
-            self.notify(
-                "Invalid challenge.", severity="error"
-            )
-            return
-
-        expected = hmac.new(
-            code.encode("utf-8"),
-            b"ACC"
-            + to_name.encode("utf-8")
-            + resp_challenge,
-            hashlib.sha256,
-        ).digest()
-        try:
-            given = bytes.fromhex(proof_hex)
-        except (TypeError, ValueError):
-            self.notify(
-                "Invalid proof.", severity="error"
-            )
-            return
-        if not hmac.compare_digest(expected, given):
-            self.notify(
-                "Proof mismatch - wrong peer or "
-                "tampered response.",
-                severity="error",
-            )
-            self._audit(
-                "PROOF_MISMATCH",
-                {"peer_name": to_name},
-            )
-            return
-
-        try:
-            peer_ed_pk = ed_public_from_bytes(
-                bytes.fromhex(to_ed)
-            )
-        except Exception:
-            self.notify(
-                "Invalid peer key.", severity="error"
-            )
-            return
-        if not self._check_signed(resp, peer_ed_pk):
-            self.notify(
-                "Invalid response signature.",
-                severity="error",
-            )
-            return
-
-        existing = self.db.get_contact(found_name)
-        if (
-            existing
-            and existing["ed_public_hex"] != to_ed
-        ):
-            self.notify(
-                f"Key mismatch for {found_name}. "
-                "Refusing to overwrite.",
-                severity="error",
-            )
-            return
-
-        self.db.upsert_contact(
-            name=found_name,
-            ip=info["ip"],
-            port=info["tcp_port"],
-            ed_public_hex=to_ed,
-            x25519_public_hex=to_x,
-        )
-        self._audit(
-            "ADD_REQUEST_SENT", {"contact": found_name}
+        return await self._process_add_response(
+            resp,
+            code,
+            info["ip"],
+            info["tcp_port"],
+            expected_found_name=found_name,
         )
 
-        if resp_type == "ADD_ACCEPT":
-            self.db.set_contact_state(
-                found_name, pending=0
-            )
-            self.notify(f"Added {found_name}.")
-        else:
-            self.db.set_contact_state(
-                found_name, pending=1
-            )
-            self.notify(
-                f"Request sent to {found_name}. "
-                "Waiting for acceptance."
-            )
-        self._refresh_main()
-        self._refresh_visible_messages()
+    async def add_contact_by_ip(self, ip, port, code):
+        self.notify("Contacting peer...", timeout=2)
+        payload = self._build_add_request_payload(code)
+        resp = await send_request(ip, port, payload)
+        return await self._process_add_response(
+            resp,
+            code,
+            ip,
+            port,
+            expected_found_name=None,
+        )
 
     async def handle_incoming(self, msg):
         t = msg.get("type")
@@ -2116,6 +2471,11 @@ class LanMessApp(App):
             return {
                 "type": "ADD_REJECT",
                 "reason": "missing_name",
+            }
+        if from_name == self.user_name:
+            return {
+                "type": "ADD_REJECT",
+                "reason": "self",
             }
         if not self._valid_hex(from_ed, 32):
             return {

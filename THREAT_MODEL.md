@@ -18,11 +18,20 @@
 
 - Rooted or unlocked device while logged in (in-memory keys readable by same UID).
 - Coerced PIN disclosure (no duress mode).
-- Traffic analysis of timing and packet volume on the wire (use Tailscale or a VPN).
+- Traffic analysis of timing and packet volume on the wire (use a VPN if that matters).
 - Compromise of a peer's device (their copy of your messages is exposed).
 - First-contact MITM without out-of-band safety-number verification.
 - Key rotation and revocation (no protocol for replacing a peer's key on a live identity).
 - No independent audit has been performed.
+
+## Scope
+
+Discovery is UDP broadcast and only travels within a broadcast domain. To add
+peers across routed networks, use the add-by-IP flow. That flow bypasses
+discovery entirely and sends the signed add handshake directly to the address
+you provide; the transport is whatever the OS routing table resolves to. TLS
+is not used on the wire in either mode, so frame structure (sender name,
+counters, sizes, timing) remains visible to a passive observer on the path.
 
 ## Roadmap to v2.0
 
