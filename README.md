@@ -27,7 +27,7 @@ Addresses from add-by-IP are pinned: they will not be overwritten by
 `_apply_peer_ip` when the peer's LAN address changes. Add-by-code contacts
 are not pinned.
 
-## v1.1.9 features
+## v1.1.10 features
 
 - Manual IP pinning: typed addresses survive LAN visits.
 - Session idle timeout: 10 minutes of inactivity ends the session.
@@ -50,6 +50,6 @@ are not pinned.
 
 ## Migrating
 
-From v1.1.3 through v1.1.8: enter your PIN. Nothing lost.
+From v1.1.3 through v1.1.9: enter your PIN. Nothing lost.
 
 See THREAT_MODEL.md for what is and isn't defended.
