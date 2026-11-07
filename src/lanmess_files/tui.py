@@ -37,17 +37,26 @@ from .config import (
     APP_VERSION,
     CONTROL_SIG_PREFIX,
     DB_PATH,
+    HISTORY_MAX,
+    MAX_CHAIN_GAP,
     MAX_GROUP_CODE_LEN,
     MAX_MESSAGE_LEN,
+    MESSAGE_TIMEOUT,
     MIN_GROUP_CODE_LEN,
     MSG_RATE_LIMIT_MAX,
     MSG_RATE_LIMIT_SECONDS,
+    NOTIFY_BODY_MAX,
+    ONLINE_WINDOW,
     PIN_MAX_LEN,
     PIN_MIN_LEN,
+    PRESENCE_INTERVAL,
     REPLAY_WINDOW_SECONDS,
     SEARCH_WAIT_SECONDS,
+    SESSION_IDLE_TIMEOUT,
     STOP_TIMEOUT,
     TCP_PORT_RANGE,
+    TYPING_DISPLAY_TTL,
+    TYPING_THROTTLE,
     UNREAD_MAX,
     ensure_dirs,
 )
@@ -83,6 +92,7 @@ from .crypto import (
 from .database import Database
 from .discovery import Discovery
 from .network import Server, send_request
+from .notifications import notify
 
 
 def _now_ms():
@@ -321,7 +331,7 @@ class AddByIpScreen(ModalScreen):
     CSS = """
     AddByIpScreen { align: center middle; }
     #addip-box {
-        width: 60;
+        width: 62;
         height: auto;
         border: thick $accent;
         padding: 2 3;
@@ -335,6 +345,11 @@ class AddByIpScreen(ModalScreen):
     }
     #addip-note {
         color: $text-muted;
+        padding: 0 0 1 0;
+        text-align: center;
+    }
+    #addip-pin-note {
+        color: $success;
         padding: 0 0 1 0;
         text-align: center;
     }
@@ -359,10 +374,14 @@ class AddByIpScreen(ModalScreen):
         with Container(id="addip-box"):
             yield Static("Add by IP", id="addip-title")
             yield Static(
-                "Enter the peer's address and the "
-                "8-digit code they show under "
-                "Show add code.",
+                "Enter the peer's address and the 8-digit "
+                "code they show under Show add code.",
                 id="addip-note",
+            )
+            yield Static(
+                "Address will be pinned: won't be overwritten "
+                "when the peer's LAN IP changes.",
+                id="addip-pin-note",
             )
             yield Input(
                 placeholder="IP (e.g. 192.168.1.42)",
@@ -525,6 +544,17 @@ class MenuScreen(ModalScreen):
         Binding("m", "dismiss_menu", "Close", show=False),
     ]
 
+    def __init__(
+        self,
+        verified_only=False,
+        notifications_enabled=True,
+        presence_enabled=True,
+    ):
+        super().__init__()
+        self.verified_only = verified_only
+        self.notifications_enabled = notifications_enabled
+        self.presence_enabled = presence_enabled
+
     def compose(self) -> ComposeResult:
         with Container(id="menu-box"):
             yield Static("Menu", id="menu-title")
@@ -551,17 +581,14 @@ class MenuScreen(ModalScreen):
                     variant="warning",
                 )
                 yield Button(
-                    "Verify contact (V)",
-                    id="m-verify",
+                    "Verify contact (V)", id="m-verify"
                 )
                 yield Button(
-                    "Add by IP (I)",
-                    id="m-addip",
+                    "Add by IP (I)", id="m-addip"
                 )
                 yield Static("History", classes="menu-section")
                 yield Button(
-                    "Clear local history (C)",
-                    id="m-clear",
+                    "Clear local history (C)", id="m-clear"
                 )
                 yield Button(
                     "Request clear-all (both sides)",
@@ -572,24 +599,34 @@ class MenuScreen(ModalScreen):
                     id="m-delete",
                     variant="error",
                 )
+                yield Static("Privacy", classes="menu-section")
+                yield Button(
+                    f"Verified-only: "
+                    f"{'ON' if self.verified_only else 'OFF'}",
+                    id="m-vonl",
+                )
+                yield Button(
+                    f"Notifications: "
+                    f"{'ON' if self.notifications_enabled else 'OFF'}",
+                    id="m-notif",
+                )
+                yield Button(
+                    f"Presence: "
+                    f"{'ON' if self.presence_enabled else 'OFF'}",
+                    id="m-presence",
+                )
                 yield Static("Session", classes="menu-section")
                 yield Button(
-                    "Show my address",
-                    id="m-address",
+                    "Show my address", id="m-address"
                 )
                 yield Button(
-                    "Show add code (Ctrl+Z)",
-                    id="m-code",
+                    "Show add code (Ctrl+Z)", id="m-code"
                 )
                 yield Button(
-                    "Lock (Ctrl+L)",
-                    id="m-lock",
+                    "Lock (Ctrl+L)", id="m-lock"
                 )
                 yield Static("System", classes="menu-section")
-                yield Button(
-                    "Help (?)",
-                    id="m-help",
-                )
+                yield Button("Help (?)", id="m-help")
                 yield Button(
                     "Reset everything (Ctrl+R)",
                     id="m-reset",
@@ -597,9 +634,7 @@ class MenuScreen(ModalScreen):
                 )
                 yield Static("", classes="menu-section")
                 yield Button(
-                    "Close",
-                    id="m-close",
-                    variant="primary",
+                    "Close", id="m-close", variant="primary"
                 )
 
     def on_button_pressed(self, event):
@@ -729,17 +764,20 @@ class HelpScreen(ModalScreen):
             yield Static("Help", id="help-title")
             yield Static(
                 "Commands:\n"
-                "  /help      Show this help\n"
-                "  /menu      Open the action menu\n"
-                "  /addip     Add by IP and port\n"
-                "  /address   Show your IPs and port\n"
-                "  /code      Show your add code\n"
-                "  /verify    Show safety number\n"
-                "  /clear     Clear local history\n"
-                "  /clearall  Ask contact to clear both sides\n"
-                "  /stop      Stop the chat\n"
-                "  /del <id>  Delete message #id\n"
-                "  /del       Delete most recent message\n"
+                "  /help          Show this help\n"
+                "  /menu          Open the action menu\n"
+                "  /addip         Add by IP and port\n"
+                "  /address       Show your IPs and port\n"
+                "  /code          Show your add code\n"
+                "  /verify        Show safety number\n"
+                "  /find <text>   Search messages\n"
+                "  /reply <id> <t> Reply to message\n"
+                "  /react <id> <e> React to message\n"
+                "  /clear         Clear local history\n"
+                "  /clearall      Ask to clear both sides\n"
+                "  /stop          Stop the chat\n"
+                "  /del <id>      Delete message #id\n"
+                "  /del           Delete most recent\n"
                 "\n"
                 "Keys:\n"
                 "  M          Open menu\n"
@@ -750,21 +788,19 @@ class HelpScreen(ModalScreen):
                 "  ?          This help\n"
                 "  A/S/Y/X    Add/Start/Accept/Reject\n"
                 "  C/D/T/V    Clear/Delete/Stop/Verify\n"
+                "  Up/Down    Message history\n"
                 "\n"
-                "Adding contacts:\n"
-                "  By code works when both devices share\n"
-                "  a broadcast domain. By IP works on\n"
-                "  any routed network - enter the peer's\n"
-                "  address and current add code.\n"
-                "\n"
-                "Security (v1.1.8):\n"
+                "Security (v1.1.9):\n"
                 "  Per-session X25519 + hash ratchet.\n"
                 "  Ed25519 signatures on every frame.\n"
                 "  256-byte padding on messages.\n"
                 "  Safety numbers for identity proof.\n"
                 "  Random per-device master wrapped\n"
                 "  with Argon2id(PIN).\n"
-                "  HMAC-chained audit log.",
+                "  HMAC-chained audit log.\n"
+                "  PIN lockout after 5 failures.\n"
+                "  Optional verified-only and idle\n"
+                "  session timeout.",
                 id="help-content",
             )
             yield Button(
@@ -877,7 +913,7 @@ class StartupScreen(Screen):
                 )
             elif self.state == "needs_vault":
                 yield Static(
-                    "Migrating to v1.1.8. Enter your old "
+                    "Migrating to v1.1.9. Enter your old "
                     "group code once, then choose a PIN.",
                     id="startup-note",
                 )
@@ -1096,6 +1132,7 @@ class ContactItem(ListItem):
         verified,
         session_established,
         unread_count,
+        online=False,
     ):
         parts = []
         if unread_count > 0:
@@ -1108,6 +1145,8 @@ class ContactItem(ListItem):
         parts.append(name)
         if verified:
             parts.append("*")
+        if online and session_established:
+            parts.append("●")
         if pending == 2:
             parts.append("[accept?]")
         elif blocked:
@@ -1123,6 +1162,7 @@ class ContactItem(ListItem):
         elif chat_started:
             parts.append("[legacy]")
         label = " ".join(parts)
+        self.label_text = label
         super().__init__(Label(label))
         self.contact_name = name
 
@@ -1179,22 +1219,33 @@ class MainScreen(Screen):
         Binding("y", "accept", "Accept", show=False),
         Binding("x", "reject", "Reject", show=False),
         Binding("c", "clear_chat", "Clear", show=False),
-        Binding("d", "delete_contact", "Delete", show=False),
+        Binding(
+            "d", "delete_contact", "Delete", show=False
+        ),
         Binding("t", "stop_chat", "Stop", show=False),
         Binding("v", "verify", "Verify", show=False),
         Binding("ctrl+r", "reset_all", "Reset", show=False),
         Binding("f5", "refresh", "Refresh", show=False),
+        Binding("up", "history_prev", "Prev", show=False),
+        Binding("down", "history_next", "Next", show=False),
     ]
 
     def __init__(self):
         super().__init__()
         self.current_contact = None
+        self._history = []
+        self._history_idx = -1
+        self._contacts_items = {}
+        self._last_contacts_sig = None
+        self._status_tokens = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="main-layout"):
             with Vertical(id="sidebar"):
-                yield Static("Contacts", id="sidebar-title")
+                yield Static(
+                    "Contacts", id="sidebar-title"
+                )
                 yield ListView(id="contacts")
                 yield Input(
                     placeholder="Add by 8-digit code...",
@@ -1206,7 +1257,9 @@ class MainScreen(Screen):
                     "Select a contact", id="chat-title"
                 )
                 yield RichLog(
-                    id="messages", markup=False, wrap=True
+                    id="messages",
+                    markup=False,
+                    wrap=True,
                 )
                 yield Static("", id="status")
                 yield Input(
@@ -1217,12 +1270,19 @@ class MainScreen(Screen):
         yield Footer()
 
     def on_mount(self):
-        self.refresh_contacts()
+        self.refresh_contacts(force=True)
         self.load_messages_for(None)
+        self.set_interval(1.0, self._tick_presence)
 
-    def set_status(self, msg):
+    def set_status(self, msg, token="main"):
         try:
-            self.query_one("#status", Static).update(msg)
+            self._status_tokens[token] = msg
+            parts = [
+                v for v in self._status_tokens.values() if v
+            ]
+            self.query_one(
+                "#status", Static
+            ).update(" · ".join(parts) if parts else "")
         except Exception:
             pass
 
@@ -1232,15 +1292,70 @@ class MainScreen(Screen):
         except Exception:
             pass
 
-    def refresh_contacts(self):
+    def _is_online(self, name):
         try:
-            lv = self.query_one("#contacts", ListView)
+            ts = self.app._last_heard.get(name, 0)
+            return time.time() - ts < ONLINE_WINDOW
         except Exception:
+            return False
+
+    def _is_typing(self, name):
+        try:
+            ts = self.app._peer_typing.get(name, 0)
+            return time.time() - ts < TYPING_DISPLAY_TTL
+        except Exception:
+            return False
+
+    def _tick_presence(self):
+        try:
+            self.refresh_contacts()
+            if self.current_contact:
+                self._refresh_chat_title()
+        except Exception:
+            pass
+
+    def _refresh_chat_title(self):
+        if not self.current_contact:
+            self.set_chat_title("Select a contact")
             return
-        lv.clear()
+        contact = self.app.db.get_contact(
+            self.current_contact
+        )
+        if not contact:
+            self.set_chat_title("Select a contact")
+            return
+        suffix = " *verified" if contact.get("verified") else ""
+        if self._is_typing(self.current_contact):
+            suffix += " (typing...)"
+        elif (
+            self._is_online(self.current_contact)
+            and contact.get("session_established")
+        ):
+            suffix += " (online)"
+        state = ""
+        if contact.get("blocked"):
+            state = " [BLOCKED]"
+        elif contact.get("pending") == 2:
+            state = " [pending your accept]"
+        elif contact.get("pending") == 1:
+            state = " [waiting for peer]"
+        elif contact.get("clear_pending"):
+            state = " [peer wants to clear]"
+        elif contact.get("chat_started") and contact.get(
+            "session_established"
+        ):
+            state = " [active]"
+        elif contact.get("chat_started"):
+            state = " [legacy session]"
+        self.set_chat_title(
+            f"{self.current_contact}{suffix}{state}"
+        )
+
+    def _contacts_signature(self):
+        sig = []
         for c in self.app.db.get_contacts():
-            lv.append(
-                ContactItem(
+            sig.append(
+                (
                     c["name"],
                     c.get("chat_started", 0),
                     c.get("incoming_request", 0),
@@ -1250,16 +1365,70 @@ class MainScreen(Screen):
                     c.get("verified", 0),
                     c.get("session_established", 0),
                     int(c.get("unread_count", 0)),
+                    self._is_online(c["name"]),
+                    self._is_typing(c["name"]),
                 )
             )
+        return tuple(sig)
+
+    def _build_contact_item(self, c):
+        return ContactItem(
+            c["name"],
+            c.get("chat_started", 0),
+            c.get("incoming_request", 0),
+            c.get("blocked", 0),
+            c.get("pending", 0),
+            c.get("clear_pending", 0),
+            c.get("verified", 0),
+            c.get("session_established", 0),
+            int(c.get("unread_count", 0)),
+            online=self._is_online(c["name"]),
+        )
+
+    def refresh_contacts(self, force=False):
+        try:
+            lv = self.query_one("#contacts", ListView)
+        except Exception:
+            return
+        new_sig = self._contacts_signature()
+        if not force and new_sig == self._last_contacts_sig:
+            return
+        self._last_contacts_sig = new_sig
+        contacts = self.app.db.get_contacts()
+        new_names = [c["name"] for c in contacts]
+        old_names = list(self._contacts_items.keys())
+        if not force and new_names == old_names:
+            for c in contacts:
+                item = self._contacts_items.get(c["name"])
+                if item is None:
+                    continue
+                try:
+                    built = self._build_contact_item(c)
+                    lbl = item.query_one(Label)
+                    lbl.update(built.label_text)
+                    item.label_text = built.label_text
+                except Exception:
+                    continue
+            return
+        try:
+            lv.clear()
+        except Exception:
+            return
+        self._contacts_items = {}
+        for c in contacts:
+            try:
+                item = self._build_contact_item(c)
+                lv.append(item)
+                self._contacts_items[c["name"]] = item
+            except Exception:
+                continue
         if self.current_contact:
-            for index, item in enumerate(list(lv.children)):
-                if (
-                    isinstance(item, ContactItem)
-                    and item.contact_name
-                    == self.current_contact
-                ):
-                    lv.index = index
+            for index, name in enumerate(new_names):
+                if name == self.current_contact:
+                    try:
+                        lv.index = index
+                    except Exception:
+                        pass
                     break
 
     def load_messages_for(self, contact_name):
@@ -1277,25 +1446,7 @@ class MainScreen(Screen):
         if not contact:
             self.set_chat_title("Select a contact")
             return
-        suffix = " *verified" if contact.get("verified") else ""
-        state = ""
-        if contact.get("blocked"):
-            state = " [BLOCKED]"
-        elif contact.get("pending") == 2:
-            state = " [pending your accept]"
-        elif contact.get("pending") == 1:
-            state = " [waiting for peer]"
-        elif contact.get("clear_pending"):
-            state = " [peer wants to clear]"
-        elif contact.get("chat_started") and contact.get(
-            "session_established"
-        ):
-            state = " [active]"
-        elif contact.get("chat_started"):
-            state = " [legacy session]"
-        self.set_chat_title(
-            f"{contact_name}{suffix}{state}"
-        )
+        self._refresh_chat_title()
         self.app.db.clear_unread(contact_name)
         self.refresh_contacts()
         if contact.get("blocked"):
@@ -1325,14 +1476,38 @@ class MainScreen(Screen):
                 if m["direction"] == "out"
                 else contact_name
             )
+            rt = m.get("reply_to", 0)
+            ct = m.get("react_to", 0)
+            prefix = ""
+            if rt:
+                prefix = f"[re #{rt}] "
+            elif ct:
+                prefix = f"[react #{ct}] "
             log.write(
                 f"[#{m['id']}] [{ts}] {who}: "
-                f"{m['content']}"
+                f"{prefix}{m['content']}"
             )
 
     def on_list_view_selected(self, event):
-        if isinstance(event.item, ContactItem):
-            self.load_messages_for(event.item.contact_name)
+        try:
+            if isinstance(event.item, ContactItem):
+                self.load_messages_for(
+                    event.item.contact_name
+                )
+        except Exception:
+            pass
+
+    async def on_input_changed(self, event):
+        if event.input.id == "message-input":
+            if (
+                self.current_contact
+                and event.value.strip()
+            ):
+                asyncio.create_task(
+                    self.app.send_typing(
+                        self.current_contact
+                    )
+                )
 
     async def on_input_submitted(self, event):
         if event.input.id == "add-code":
@@ -1345,7 +1520,7 @@ class MainScreen(Screen):
                 )
                 return
             event.input.disabled = True
-            self.set_status("Adding...")
+            self.set_status("Adding...", token="add")
             try:
                 await self.app.add_contact_by_code(code)
             except Exception as e:
@@ -1353,7 +1528,7 @@ class MainScreen(Screen):
                     f"Add failed: {e}", severity="error"
                 )
             finally:
-                self.set_status("")
+                self.set_status("", token="add")
                 try:
                     event.input.disabled = False
                 except Exception:
@@ -1372,17 +1547,83 @@ class MainScreen(Screen):
                     severity="error",
                 )
                 return
-            self.set_status("Sending...")
+            self._history.append(text)
+            if len(self._history) > HISTORY_MAX:
+                self._history = self._history[-HISTORY_MAX:]
+            self._history_idx = -1
+            contact_name = self.current_contact
+            asyncio.create_task(
+                self._send_bg(contact_name, text)
+            )
+
+    async def _send_bg(self, contact_name, text):
+        self.set_status("Sending...", token="send")
+        ok = False
+        try:
+            ok = await self.app.send_chat_message(
+                contact_name, text
+            )
+        except Exception as e:
+            self.app.notify(
+                f"Send failed: {e}", severity="error"
+            )
+            ok = False
+        finally:
+            self.set_status("", token="send")
+        if not ok:
             try:
-                await self.app.send_chat_message(
-                    self.current_contact, text
+                inp = self.query_one(
+                    "#message-input", Input
                 )
-            except Exception as e:
-                self.app.notify(
-                    f"Send failed: {e}", severity="error"
-                )
-            finally:
-                self.set_status("")
+                if not inp.value:
+                    inp.value = text
+                    try:
+                        inp.cursor_position = len(text)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+    def _navigate_history(self, direction):
+        if not self._history:
+            return
+        try:
+            inp = self.query_one("#message-input", Input)
+        except Exception:
+            return
+        if direction < 0:
+            if self._history_idx < 0:
+                self._history_idx = len(self._history) - 1
+            elif self._history_idx > 0:
+                self._history_idx -= 1
+            inp.value = self._history[self._history_idx]
+        else:
+            if (
+                self._history_idx >= 0
+                and self._history_idx
+                < len(self._history) - 1
+            ):
+                self._history_idx += 1
+                inp.value = self._history[self._history_idx]
+            else:
+                self._history_idx = -1
+                inp.value = ""
+
+    def action_history_prev(self):
+        try:
+            inp = self.query_one("#message-input", Input)
+        except Exception:
+            return
+        if inp.has_focus:
+            self._navigate_history(-1)
+
+    def action_history_next(self):
+        try:
+            inp = self.query_one("#message-input", Input)
+        except Exception:
+            return
+        if inp.has_focus:
+            self._navigate_history(1)
 
     async def handle_command(self, cmd):
         parts = cmd.split(None, 1)
@@ -1415,6 +1656,12 @@ class MainScreen(Screen):
             return
         if name == "/verify":
             self.action_verify()
+        elif name == "/find":
+            await self._do_find(arg)
+        elif name == "/reply":
+            await self._do_reply(arg)
+        elif name == "/react":
+            await self._do_react(arg)
         elif name == "/clear":
             self.action_clear_chat()
         elif name == "/clearall":
@@ -1451,6 +1698,116 @@ class MainScreen(Screen):
                 severity="error",
             )
 
+    async def _do_find(self, arg):
+        if not arg:
+            self.app.notify(
+                "Usage: /find <text>", severity="error"
+            )
+            return
+        results = self.app.db.search_messages(
+            self.current_contact, arg
+        )
+        log = self.query_one("#messages", RichLog)
+        log.clear()
+        log.write(
+            f"--- Search: '{arg}' "
+            f"({len(results)} matches) ---"
+        )
+        for m in results:
+            ts = time.strftime(
+                "%H:%M", time.localtime(m["timestamp"])
+            )
+            who = (
+                "You"
+                if m["direction"] == "out"
+                else self.current_contact
+            )
+            log.write(
+                f"[#{m['id']}] [{ts}] {who}: "
+                f"{m['content']}"
+            )
+
+    async def _do_reply(self, arg):
+        parts = arg.split(None, 1)
+        if len(parts) != 2:
+            self.app.notify(
+                "Usage: /reply <id> <text>",
+                severity="error",
+            )
+            return
+        try:
+            target_id = int(parts[0])
+        except ValueError:
+            self.app.notify(
+                "Invalid message ID.", severity="error"
+            )
+            return
+        text = parts[1]
+        asyncio.create_task(
+            self._send_bg(
+                self.current_contact,
+                text,
+                reply_to=target_id,
+            )
+        )
+
+    async def _do_react(self, arg):
+        parts = arg.split(None, 1)
+        if len(parts) != 2:
+            self.app.notify(
+                "Usage: /react <id> <emoji>",
+                severity="error",
+            )
+            return
+        try:
+            target_id = int(parts[0])
+        except ValueError:
+            self.app.notify(
+                "Invalid message ID.", severity="error"
+            )
+            return
+        emoji = parts[1]
+        asyncio.create_task(
+            self._send_bg(
+                self.current_contact,
+                emoji,
+                react_to=target_id,
+            )
+        )
+
+    async def _send_bg(
+        self, contact_name, text, reply_to=0, react_to=0
+    ):
+        self.set_status("Sending...", token="send")
+        ok = False
+        try:
+            ok = await self.app.send_chat_message(
+                contact_name,
+                text,
+                reply_to=reply_to,
+                react_to=react_to,
+            )
+        except Exception as e:
+            self.app.notify(
+                f"Send failed: {e}", severity="error"
+            )
+            ok = False
+        finally:
+            self.set_status("", token="send")
+        if not ok and not reply_to and not react_to:
+            try:
+                inp = self.query_one(
+                    "#message-input", Input
+                )
+                if not inp.value:
+                    inp.value = text
+                    try:
+                        inp.cursor_position = len(text)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
     def action_focus_add(self):
         self.query_one("#add-code", Input).focus()
 
@@ -1468,7 +1825,7 @@ class MainScreen(Screen):
         )
 
     async def _do_add_by_ip(self, ip, port, code):
-        self.set_status("Adding by IP...")
+        self.set_status("Adding by IP...", token="add")
         try:
             await self.app.add_contact_by_ip(
                 ip, port, code
@@ -1478,7 +1835,7 @@ class MainScreen(Screen):
                 f"Add failed: {e}", severity="error"
             )
         finally:
-            self.set_status("")
+            self.set_status("", token="add")
 
     def action_show_address(self):
         ips = get_local_ips()
@@ -1488,7 +1845,15 @@ class MainScreen(Screen):
 
     def action_open_menu(self):
         self.app.push_screen(
-            MenuScreen(),
+            MenuScreen(
+                verified_only=self.app.db.get_verified_only(),
+                notifications_enabled=(
+                    self.app.db.get_notifications_enabled()
+                ),
+                presence_enabled=(
+                    self.app.db.get_presence_enabled()
+                ),
+            ),
             callback=self._on_menu_result,
         )
 
@@ -1526,6 +1891,35 @@ class MainScreen(Screen):
                 self.action_add_by_ip()
             elif action == "address":
                 self.action_show_address()
+            elif action == "vonl":
+                new = not self.app.db.get_verified_only()
+                self.app.db.set_verified_only(new)
+                self.app.notify(
+                    f"Verified-only: "
+                    f"{'ON' if new else 'OFF'}"
+                )
+            elif action == "notif":
+                new = (
+                    not self.app.db.get_notifications_enabled()
+                )
+                self.app.db.set_notifications_enabled(new)
+                self.app.notify(
+                    f"Notifications: "
+                    f"{'ON' if new else 'OFF'}"
+                )
+            elif action == "presence":
+                new = (
+                    not self.app.db.get_presence_enabled()
+                )
+                self.app.db.set_presence_enabled(new)
+                self.app.notify(
+                    f"Presence: "
+                    f"{'ON' if new else 'OFF'}"
+                )
+                if new:
+                    asyncio.create_task(
+                        self.app.broadcast_presence_now()
+                    )
         except Exception as e:
             self.app.notify(
                 f"Menu action failed: {e}",
@@ -1558,7 +1952,7 @@ class MainScreen(Screen):
                 "Select a contact first.", severity="error"
             )
             return
-        self.set_status("Starting chat...")
+        self.set_status("Starting chat...", token="start")
         try:
             await self.app.start_chat(self.current_contact)
         except Exception as e:
@@ -1566,7 +1960,7 @@ class MainScreen(Screen):
                 f"Start failed: {e}", severity="error"
             )
         finally:
-            self.set_status("")
+            self.set_status("", token="start")
 
     async def action_accept(self):
         if not self.current_contact:
@@ -1579,7 +1973,7 @@ class MainScreen(Screen):
         )
         if not contact:
             return
-        self.set_status("Accepting...")
+        self.set_status("Accepting...", token="accept")
         try:
             if contact.get("clear_pending"):
                 await self.app.accept_clear(
@@ -1598,7 +1992,7 @@ class MainScreen(Screen):
                     "Nothing to accept for this contact."
                 )
         finally:
-            self.set_status("")
+            self.set_status("", token="accept")
 
     async def action_reject(self):
         if not self.current_contact:
@@ -1611,7 +2005,7 @@ class MainScreen(Screen):
         )
         if not contact:
             return
-        self.set_status("Rejecting...")
+        self.set_status("Rejecting...", token="reject")
         try:
             if contact.get("clear_pending"):
                 await self.app.reject_clear(
@@ -1630,7 +2024,7 @@ class MainScreen(Screen):
                     "Nothing to reject for this contact."
                 )
         finally:
-            self.set_status("")
+            self.set_status("", token="reject")
 
     def action_clear_chat(self):
         if not self.current_contact:
@@ -1689,12 +2083,10 @@ class MainScreen(Screen):
 
     def _on_reset_confirmed(self, confirmed):
         if confirmed:
-            asyncio.create_task(
-                self.app.perform_reset()
-            )
+            asyncio.create_task(self.app.perform_reset())
 
     def action_refresh(self):
-        self.refresh_contacts()
+        self.refresh_contacts(force=True)
         if self.current_contact:
             self.load_messages_for(self.current_contact)
 
@@ -1715,6 +2107,8 @@ class LanMessApp(App):
         self.discovery = Discovery()
         self.server = None
         self.broadcast_task = None
+        self.idle_task = None
+        self.presence_task = None
         self.group_key = None
         self.lookup_key = None
         self.totp_secret = None
@@ -1727,6 +2121,10 @@ class LanMessApp(App):
         self._add_attempts = {}
         self._msg_attempts = {}
         self._contact_locks = {}
+        self._peer_typing = {}
+        self._last_activity = {}
+        self._last_heard = {}
+        self._last_typing_sent = {}
 
     def on_mount(self):
         self.push_screen(StartupScreen(self.db))
@@ -1815,9 +2213,7 @@ class LanMessApp(App):
         )
 
     def _resolve_peer_address(self, contact):
-        peer = self.discovery.find_by_name(
-            contact["name"]
-        )
+        peer = self.discovery.find_by_name(contact["name"])
         if peer:
             return peer["ip"], peer["tcp_port"]
         if contact.get("ip") and contact.get("port"):
@@ -1881,8 +2277,19 @@ class LanMessApp(App):
         if not peer_ip:
             return
         contact = self.db.get_contact(name)
-        if contact and contact.get("ip") != peer_ip:
-            self.db.set_contact_state(name, ip=peer_ip)
+        if not contact:
+            return
+        if contact.get("ip") == peer_ip:
+            return
+        if contact.get("pinned"):
+            return
+        self.db.set_contact_state(name, ip=peer_ip)
+
+    def _touch_activity(self, name):
+        self._last_activity[name] = time.time()
+
+    def _touch_heard(self, name):
+        self._last_heard[name] = time.time()
 
     async def create_identity(self, name, group_code, pin):
         group_key = await asyncio.to_thread(
@@ -1919,7 +2326,7 @@ class LanMessApp(App):
                 severity="error",
             )
             return
-        self.db.set_schema_version(6)
+        self.db.set_schema_version(7)
         await self._start_session()
         self._audit("IDENTITY_CREATED", {"name": name})
 
@@ -1953,16 +2360,33 @@ class LanMessApp(App):
             if not ok:
                 return False
             await self._start_session()
-            self._audit("MIGRATED_TO_V6")
+            self._audit("MIGRATED_TO_V7")
             return True
         return False
 
     async def unlock(self, pin):
+        remaining = self.db.lockout_remaining()
+        if remaining > 0:
+            self.notify(
+                f"Too many failed attempts. "
+                f"Try again in {int(remaining)}s.",
+                severity="error",
+            )
+            return False
         master = await asyncio.to_thread(
             self.db.unlock_vault, pin
         )
         if master is None:
+            lockout = self.db.record_pin_failure()
+            if lockout > 0:
+                rem = int(lockout - time.time())
+                self.notify(
+                    f"PIN incorrect. Locked out "
+                    f"for {rem}s.",
+                    severity="error",
+                )
             return False
+        self.db.record_pin_success()
         version = self.db.schema_version()
         if version == "4":
             new_master = await asyncio.to_thread(
@@ -1988,6 +2412,10 @@ class LanMessApp(App):
         self._add_attempts = {}
         self._msg_attempts = {}
         self._contact_locks = {}
+        self._peer_typing = {}
+        self._last_activity = {}
+        self._last_heard = {}
+        self._last_typing_sent = {}
         while len(self.screen_stack) > 1:
             self.pop_screen()
         self.push_screen(StartupScreen(self.db))
@@ -2018,16 +2446,25 @@ class LanMessApp(App):
             except Exception:
                 pass
             self.server = None
-        if self.broadcast_task is not None:
-            try:
-                self.broadcast_task.cancel()
+        for task_attr in (
+            "broadcast_task",
+            "idle_task",
+            "presence_task",
+        ):
+            task = getattr(self, task_attr, None)
+            if task is not None:
                 try:
-                    await self.broadcast_task
-                except (asyncio.CancelledError, Exception):
+                    task.cancel()
+                    try:
+                        await task
+                    except (
+                        asyncio.CancelledError,
+                        Exception,
+                    ):
+                        pass
+                except Exception:
                     pass
-            except Exception:
-                pass
-            self.broadcast_task = None
+                setattr(self, task_attr, None)
         try:
             await self.discovery.stop()
         except Exception:
@@ -2054,13 +2491,16 @@ class LanMessApp(App):
                 bytes.fromhex(identity["ed_public_hex"])
             )
             self.x25519_private = x25519_private_from_bytes(
-                bytes.fromhex(identity["x25519_private_hex"])
+                bytes.fromhex(
+                    identity["x25519_private_hex"]
+                )
             )
             self.x25519_public = x25519_public_from_bytes(
-                bytes.fromhex(identity["x25519_public_hex"])
+                bytes.fromhex(
+                    identity["x25519_public_hex"]
+                )
             )
             self.tcp_port = int(identity["tcp_port"])
-
             self.server = Server(
                 self.tcp_port, self.handle_incoming
             )
@@ -2074,7 +2514,6 @@ class LanMessApp(App):
                     self.tcp_port, self.handle_incoming
                 )
                 await self.server.start()
-
             await self.discovery.start()
             self.broadcast_task = asyncio.create_task(
                 self.discovery.broadcaster(
@@ -2089,11 +2528,136 @@ class LanMessApp(App):
                     self._current_code_tag,
                 )
             )
+            self.idle_task = asyncio.create_task(
+                self._idle_watchdog()
+            )
+            self.presence_task = asyncio.create_task(
+                self._presence_loop()
+            )
             self.push_screen(MainScreen())
+            asyncio.create_task(
+                self.broadcast_presence_now()
+            )
         except Exception as exc:
             self.notify(
                 f"Startup error: {exc}", severity="error"
             )
+
+    async def _idle_watchdog(self):
+        while True:
+            try:
+                await asyncio.sleep(60)
+                now = time.time()
+                for name, t in list(
+                    self._last_activity.items()
+                ):
+                    if now - t <= SESSION_IDLE_TIMEOUT:
+                        continue
+                    contact = self.db.get_contact(name)
+                    if not contact or not contact.get(
+                        "chat_started"
+                    ):
+                        continue
+                    self.notify(
+                        f"Session with {name} idle for "
+                        f"{int((now - t) // 60)} min.",
+                        timeout=4,
+                    )
+                    self._touch_activity(name)
+            except Exception:
+                pass
+
+    async def _send_presence_now(self, contact_name):
+        try:
+            contact = self.db.get_contact(contact_name)
+            if not contact:
+                return
+            if not contact.get("session_established"):
+                return
+            ip, port = self._resolve_peer_address(contact)
+            if not ip or not port:
+                return
+            payload = self._signed(
+                {
+                    "type": "PRESENCE",
+                    "from_name": self.user_name,
+                    "timestamp": _now_ms(),
+                }
+            )
+            resp = await send_request(
+                ip, port, payload, timeout=1.5
+            )
+            if resp and resp.get("type") == "OK":
+                self._touch_heard(contact_name)
+        except Exception:
+            pass
+
+    async def broadcast_presence_now(self):
+        if not self.db.get_presence_enabled():
+            return
+        try:
+            contacts = self.db.get_contacts()
+        except Exception:
+            return
+        tasks = []
+        for contact in contacts:
+            if not (
+                contact.get("chat_started")
+                and contact.get("session_established")
+            ):
+                continue
+            tasks.append(
+                self._send_presence_now(contact["name"])
+            )
+        if tasks:
+            try:
+                await asyncio.gather(
+                    *tasks, return_exceptions=True
+                )
+            except Exception:
+                pass
+
+    async def _presence_loop(self):
+        while True:
+            try:
+                await asyncio.sleep(PRESENCE_INTERVAL)
+                if not self.db.get_presence_enabled():
+                    continue
+                await self.broadcast_presence_now()
+            except Exception:
+                pass
+
+    async def send_typing(self, contact_name):
+        contact = self.db.get_contact(contact_name)
+        if not contact:
+            return
+        if not contact.get("session_established"):
+            return
+        now = time.time()
+        last = self._last_typing_sent.get(
+            contact_name, 0
+        )
+        if now - last < TYPING_THROTTLE:
+            return
+        self._last_typing_sent[contact_name] = now
+        try:
+            ip, port = self._resolve_peer_address(contact)
+            if not ip or not port:
+                return
+            payload = self._signed(
+                {
+                    "type": "TYPING",
+                    "from_name": self.user_name,
+                    "timestamp": _now_ms(),
+                }
+            )
+            resp = await send_request(
+                ip, port, payload, timeout=1.0
+            )
+            if resp and resp.get("type") == "OK":
+                self._touch_heard(contact_name)
+        except Exception:
+            pass
 
     def _current_code_tag(self):
         try:
@@ -2181,6 +2745,7 @@ class LanMessApp(App):
         peer_ip,
         peer_port,
         expected_found_name=None,
+        pinned=False,
     ):
         if not resp:
             self.notify(
@@ -2188,7 +2753,6 @@ class LanMessApp(App):
                 severity="error",
             )
             return False
-
         resp_type = resp.get("type")
         if resp_type == "ADD_REJECT":
             reason = resp.get("reason", "rejected")
@@ -2212,14 +2776,12 @@ class LanMessApp(App):
                 severity="error",
             )
             return False
-
         to_ed = resp.get("to_ed_pub", "")
         to_x = resp.get("to_x25519_pub", "")
         to_name = resp.get("to_name", "")
         challenge_b64 = resp.get("challenge", "")
         proof_hex = resp.get("proof", "")
         ts = resp.get("timestamp")
-
         if not self._valid_hex(to_ed, 32):
             self.notify(
                 "Invalid peer key.", severity="error"
@@ -2245,7 +2807,6 @@ class LanMessApp(App):
                 "Stale response.", severity="error"
             )
             return False
-
         try:
             resp_challenge = base64.b64decode(
                 challenge_b64
@@ -2260,7 +2821,6 @@ class LanMessApp(App):
                 "Invalid challenge.", severity="error"
             )
             return False
-
         expected = hmac.new(
             code.encode("utf-8"),
             b"ACC"
@@ -2286,7 +2846,6 @@ class LanMessApp(App):
                 {"peer_name": to_name},
             )
             return False
-
         try:
             peer_ed_pk = ed_public_from_bytes(
                 bytes.fromhex(to_ed)
@@ -2302,7 +2861,6 @@ class LanMessApp(App):
                 severity="error",
             )
             return False
-
         if (
             expected_found_name is not None
             and expected_found_name != to_name
@@ -2313,9 +2871,7 @@ class LanMessApp(App):
                 severity="error",
             )
             return False
-
         contact_name = expected_found_name or to_name
-
         existing = self.db.get_contact(contact_name)
         if (
             existing
@@ -2327,7 +2883,6 @@ class LanMessApp(App):
                 severity="error",
             )
             return False
-
         self.db.upsert_contact(
             name=contact_name,
             ip=peer_ip,
@@ -2335,10 +2890,13 @@ class LanMessApp(App):
             ed_public_hex=to_ed,
             x25519_public_hex=to_x,
         )
+        if pinned:
+            self.db.set_contact_state(
+                contact_name, pinned=1
+            )
         self._audit(
             "ADD_REQUEST_SENT", {"contact": contact_name}
         )
-
         if resp_type == "ADD_ACCEPT":
             self.db.set_contact_state(
                 contact_name, pending=0
@@ -2352,6 +2910,7 @@ class LanMessApp(App):
                 f"Request sent to {contact_name}. "
                 "Waiting for acceptance."
             )
+        self._touch_heard(contact_name)
         self._refresh_main()
         self._refresh_visible_messages()
         return True
@@ -2383,7 +2942,6 @@ class LanMessApp(App):
                 severity="error",
             )
             return False
-
         self.notify("Contacting peer...", timeout=2)
         payload = self._build_add_request_payload(code)
         resp = await send_request(
@@ -2395,6 +2953,7 @@ class LanMessApp(App):
             info["ip"],
             info["tcp_port"],
             expected_found_name=found_name,
+            pinned=False,
         )
 
     async def add_contact_by_ip(self, ip, port, code):
@@ -2407,6 +2966,7 @@ class LanMessApp(App):
             ip,
             port,
             expected_found_name=None,
+            pinned=True,
         )
 
     async def handle_incoming(self, msg):
@@ -2434,8 +2994,12 @@ class LanMessApp(App):
                 return await self._handle_clear_reject(msg)
             if t == "MESSAGE":
                 return await self._handle_message(msg)
+            if t == "PRESENCE":
+                return await self._handle_presence(msg)
+            if t == "TYPING":
+                return await self._handle_typing(msg)
         except Exception:
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "handler_error"}
         return {"type": "ERROR", "reason": "unknown"}
 
     async def _handle_add_request(self, msg):
@@ -2452,21 +3016,18 @@ class LanMessApp(App):
             self._prune_dict(
                 self._add_attempts, ADD_RATE_LIMIT_MAX
             )
-
         ts = msg.get("timestamp")
         if not self._valid_timestamp(ts):
             return {
                 "type": "ADD_REJECT",
                 "reason": "stale",
             }
-
         from_name = msg.get("from_name")
         from_ed = msg.get("from_ed_pub")
         from_x = msg.get("from_x25519_pub")
         from_port = msg.get("from_port")
         challenge_b64 = msg.get("challenge")
         proof_hex = msg.get("proof")
-
         if not self._valid_name(from_name):
             return {
                 "type": "ADD_REJECT",
@@ -2491,7 +3052,6 @@ class LanMessApp(App):
             1 <= from_port <= 65535
         ):
             from_port = None
-
         try:
             challenge = base64.b64decode(challenge_b64)
         except Exception:
@@ -2516,7 +3076,6 @@ class LanMessApp(App):
                 "type": "ADD_REJECT",
                 "reason": "bad_proof",
             }
-
         proof_ok = False
         for offset in (0, -1):
             code = compute_totp(
@@ -2543,7 +3102,6 @@ class LanMessApp(App):
                 "type": "ADD_REJECT",
                 "reason": "invalid_code",
             }
-
         try:
             from_pk = ed_public_from_bytes(
                 bytes.fromhex(from_ed)
@@ -2562,7 +3120,7 @@ class LanMessApp(App):
                 "type": "ADD_REJECT",
                 "reason": "bad_signature",
             }
-
+        self._touch_heard(from_name)
         existing = self.db.get_contact(from_name)
         if existing:
             if existing.get("blocked"):
@@ -2575,11 +3133,9 @@ class LanMessApp(App):
                     "type": "ADD_REJECT",
                     "reason": "key_mismatch",
                 }
-
         peer = self.discovery.find_by_name(from_name)
         ip = peer["ip"] if peer else peer_ip
         port = peer["tcp_port"] if peer else from_port
-
         self.db.upsert_contact(
             name=from_name,
             ip=ip,
@@ -2590,7 +3146,6 @@ class LanMessApp(App):
         self._audit(
             "ADD_REQUEST_RECEIVED", {"from": from_name}
         )
-
         resp_challenge = os.urandom(32)
         resp_code = compute_totp(self.totp_secret, 0)
         resp_proof = hmac.new(
@@ -2600,7 +3155,6 @@ class LanMessApp(App):
             + resp_challenge,
             hashlib.sha256,
         ).digest()
-
         resp_fields = {
             "to_name": self.user_name,
             "to_ed_pub": ed_public_to_bytes(
@@ -2615,7 +3169,6 @@ class LanMessApp(App):
             "proof": resp_proof.hex(),
             "timestamp": _now_ms(),
         }
-
         if existing is None:
             self.db.set_contact_state(
                 from_name, pending=2
@@ -2682,6 +3235,7 @@ class LanMessApp(App):
             return {"type": "OK"}
         if not self._check_signed(msg, peer_pk):
             return {"type": "OK"}
+        self._touch_heard(from_name)
         self._apply_peer_ip(msg, from_name)
         if contact.get("pending") in (1, 2):
             self.db.set_contact_state(
@@ -2716,6 +3270,7 @@ class LanMessApp(App):
         ts = msg.get("timestamp")
         if not self._valid_timestamp(ts):
             return {"type": "OK"}
+        self._touch_heard(from_name)
         self._apply_peer_ip(msg, from_name)
         if contact.get("pending") == 1:
             self.db.delete_contact(from_name)
@@ -2747,6 +3302,7 @@ class LanMessApp(App):
         ts = msg.get("timestamp")
         if not self._valid_timestamp(ts):
             return None
+        self._touch_heard(from_name)
         self._apply_peer_ip(msg, from_name)
         contact = self.db.get_contact(from_name)
         return contact
@@ -2767,6 +3323,14 @@ class LanMessApp(App):
             return {
                 "type": "CHAT_REJECT",
                 "reason": "pending",
+            }
+        if (
+            self.db.get_verified_only()
+            and not contact.get("verified")
+        ):
+            return {
+                "type": "CHAT_REJECT",
+                "reason": "unverified",
             }
         try:
             peer_eph_raw = base64.b64decode(
@@ -2850,6 +3414,7 @@ class LanMessApp(App):
             session_local_eph_sk_hex="",
             session_peer_eph_pub_hex="",
         )
+        self._touch_activity(contact["name"])
         self._refresh_main()
         self.notify(
             f"Chat started with {contact['name']}."
@@ -2857,6 +3422,9 @@ class LanMessApp(App):
         self._audit(
             "CHAT_START_ACCEPTED",
             {"contact": contact["name"]},
+        )
+        asyncio.create_task(
+            self._send_presence_now(contact["name"])
         )
         return {"type": "OK"}
 
@@ -2885,6 +3453,7 @@ class LanMessApp(App):
             session_local_eph_sk_hex="",
             session_peer_eph_pub_hex="",
         )
+        self._last_activity.pop(contact["name"], None)
         self._refresh_main()
         self._refresh_visible_messages()
         self.notify(
@@ -2966,44 +3535,64 @@ class LanMessApp(App):
         )
         return {"type": "OK"}
 
+    async def _handle_presence(self, msg):
+        contact = await self._verify_peer_sig(msg)
+        if not contact:
+            return {"type": "OK"}
+        return {"type": "OK"}
+
+    async def _handle_typing(self, msg):
+        contact = await self._verify_peer_sig(msg)
+        if not contact:
+            return {"type": "OK"}
+        self._peer_typing[contact["name"]] = time.time()
+        return {"type": "OK"}
+
     async def _handle_message(self, msg):
         peer_ip = msg.get("_peer_ip")
         now = time.time()
         if peer_ip:
             last = self._msg_attempts.get(peer_ip, 0)
             if now - last < MSG_RATE_LIMIT_SECONDS:
-                return {"type": "ERROR"}
+                return {"type": "ERROR", "reason": "rate_limited"}
             self._msg_attempts[peer_ip] = now
             self._prune_dict(
                 self._msg_attempts, MSG_RATE_LIMIT_MAX
             )
         from_name = msg.get("from_name")
         if not self._valid_name(from_name):
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "bad_name"}
         contact = self.db.get_contact(from_name)
+        if not contact:
+            return {"type": "ERROR", "reason": "unknown_contact"}
+        if contact.get("blocked"):
+            return {"type": "ERROR", "reason": "blocked"}
+        if not contact.get("chat_started"):
+            return {"type": "ERROR", "reason": "no_chat"}
+        if contact.get("pending") != 0:
+            return {"type": "ERROR", "reason": "pending"}
+        if not contact.get("session_established"):
+            return {"type": "ERROR", "reason": "no_session"}
         if (
-            not contact
-            or contact.get("blocked")
-            or not contact.get("chat_started")
-            or contact.get("pending") != 0
-            or not contact.get("session_established")
+            self.db.get_verified_only()
+            and not contact.get("verified")
         ):
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "unverified"}
         counter = msg.get("counter")
         if (
             not isinstance(counter, int)
             or counter <= 0
             or counter > 2**63 - 1
         ):
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "bad_counter"}
         try:
             nonce = base64.b64decode(msg["nonce"])
             ct = base64.b64decode(msg["ciphertext"])
             sig = base64.b64decode(msg["signature"])
         except Exception:
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "bad_frame"}
         if len(nonce) != 12 or len(ct) < 16 or len(sig) != 64:
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "bad_frame"}
         signed_data = (
             from_name.encode("utf-8")
             + counter.to_bytes(8, "big")
@@ -3015,7 +3604,7 @@ class LanMessApp(App):
                 bytes.fromhex(contact["ed_public_hex"])
             )
         except Exception:
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "bad_key"}
         if not verify_bytes(ed_pk, sig, signed_data):
             self.db.set_contact_state(
                 from_name, blocked=1
@@ -3030,18 +3619,25 @@ class LanMessApp(App):
             )
             self._refresh_main()
             self._refresh_visible_messages()
-            return {"type": "ERROR"}
-        if counter != contact.get("recv_counter", 0) + 1:
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "sig_fail"}
+        self._touch_heard(from_name)
+        recv_counter = contact.get("recv_counter", 0)
+        if counter <= recv_counter:
+            return {"type": "ERROR", "reason": "replay"}
         recv_chain_hex = contact.get(
             "recv_chain_key_hex", ""
         )
         if not recv_chain_hex:
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "no_chain"}
         try:
             recv_chain = bytes.fromhex(recv_chain_hex)
         except ValueError:
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "bad_chain"}
+        gap = counter - recv_counter - 1
+        if gap > MAX_CHAIN_GAP:
+            return {"type": "ERROR", "reason": "gap_too_big"}
+        for _ in range(gap):
+            recv_chain = chain_advance(recv_chain)
         msg_key = chain_message_key(recv_chain)
         aad = (
             f"{from_name}:{counter}".encode("utf-8")
@@ -3064,31 +3660,75 @@ class LanMessApp(App):
             )
             self._refresh_main()
             self._refresh_visible_messages()
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "dec_fail"}
         try:
             text = unpad_message(padded).decode(
                 "utf-8", errors="replace"
             )
         except Exception:
-            return {"type": "ERROR"}
+            return {"type": "ERROR", "reason": "bad_pad"}
         if len(text) > MAX_MESSAGE_LEN:
             text = text[:MAX_MESSAGE_LEN]
+        reply_to = int(msg.get("reply_to", 0) or 0)
+        react_to = int(msg.get("react_to", 0) or 0)
         new_chain = chain_advance(recv_chain)
-        self.db.add_message(from_name, "in", text)
+        self.db.add_message(
+            from_name,
+            "in",
+            text,
+            reply_to=reply_to,
+            react_to=react_to,
+        )
         self.db.set_contact_state(
             from_name,
             recv_chain_key_hex=new_chain.hex(),
             recv_counter=counter,
         )
         if peer_ip and peer_ip != contact.get("ip"):
-            self.db.set_contact_state(
-                from_name, ip=peer_ip
-            )
+            if not contact.get("pinned"):
+                self.db.set_contact_state(
+                    from_name, ip=peer_ip
+                )
         if not self._is_currently_viewing(from_name):
             self.db.increment_unread(from_name)
-        self._refresh_main()
-        self._refresh_visible_messages()
+        self._touch_activity(from_name)
+        try:
+            enabled = self.db.get_notifications_enabled()
+            if react_to:
+                notif_body = (
+                    f"reacted to #{react_to}: {text}"
+                )
+            elif reply_to:
+                notif_body = (
+                    f"re #{reply_to}: {text[:NOTIFY_BODY_MAX]}"
+                )
+            else:
+                notif_body = text[:NOTIFY_BODY_MAX]
+            asyncio.create_task(
+                asyncio.to_thread(
+                    notify,
+                    from_name,
+                    notif_body,
+                    enabled=enabled,
+                )
+            )
+        except Exception:
+            pass
+        asyncio.create_task(
+            self._deferred_refresh(from_name)
+        )
         return {"type": "OK"}
+
+    async def _deferred_refresh(self, contact_name):
+        try:
+            screen = self._get_main_screen()
+            if screen is None:
+                return
+            screen.refresh_contacts()
+            if screen.current_contact == contact_name:
+                screen.load_messages_for(contact_name)
+        except Exception:
+            pass
 
     async def start_chat(self, contact_name):
         contact = self.db.get_contact(contact_name)
@@ -3102,6 +3742,16 @@ class LanMessApp(App):
         if contact.get("pending") != 0:
             self.notify(
                 "Contact is not accepted yet.",
+                severity="error",
+            )
+            return
+        if (
+            self.db.get_verified_only()
+            and not contact.get("verified")
+        ):
+            self.notify(
+                "Contact is not verified. Verify or "
+                "disable verified-only mode.",
                 severity="error",
             )
             return
@@ -3136,11 +3786,17 @@ class LanMessApp(App):
             )
             return
         if resp.get("type") == "CHAT_REJECT":
-            self.notify(
-                f"Rejected: "
-                f"{resp.get('reason', 'unknown')}",
-                severity="error",
-            )
+            reason = resp.get("reason", "unknown")
+            if reason == "unverified":
+                self.notify(
+                    "Peer rejected: contact unverified.",
+                    severity="error",
+                )
+            else:
+                self.notify(
+                    f"Rejected: {reason}",
+                    severity="error",
+                )
             return
         self.db.set_contact_state(
             contact_name,
@@ -3150,6 +3806,8 @@ class LanMessApp(App):
                 x25519_private_to_bytes(eph_sk).hex()
             ),
         )
+        self._touch_activity(contact_name)
+        self._touch_heard(contact_name)
         self._audit(
             "CHAT_START_SENT", {"contact": contact_name}
         )
@@ -3190,6 +3848,7 @@ class LanMessApp(App):
         self.db.set_contact_state(
             contact_name, pending=0, ip=ip, port=port
         )
+        self._touch_heard(contact_name)
         self._refresh_main()
         self.notify(f"Accepted {contact_name}.")
         self._audit(
@@ -3303,6 +3962,8 @@ class LanMessApp(App):
             ip=ip,
             port=port,
         )
+        self._touch_activity(contact_name)
+        self._touch_heard(contact_name)
         self._refresh_main()
         self.notify(
             f"Chat accepted with {contact_name}."
@@ -3310,6 +3971,9 @@ class LanMessApp(App):
         self._audit(
             "CHAT_ACCEPTED_LOCAL",
             {"contact": contact_name},
+        )
+        asyncio.create_task(
+            self._send_presence_now(contact_name)
         )
 
     async def reject_chat(self, contact_name):
@@ -3361,6 +4025,8 @@ class LanMessApp(App):
                     ip, port, payload, timeout=STOP_TIMEOUT
                 )
                 sent = bool(resp)
+                if sent:
+                    self._touch_heard(contact_name)
             except Exception:
                 sent = False
         self.db.clear_messages(contact_name)
@@ -3416,53 +4082,69 @@ class LanMessApp(App):
             {"contact": contact_name},
         )
 
-    async def send_chat_message(self, contact_name, text):
+    async def send_chat_message(
+        self,
+        contact_name,
+        text,
+        reply_to=0,
+        react_to=0,
+    ):
         async with self._get_contact_lock(contact_name):
             contact = self.db.get_contact(contact_name)
             if not contact:
-                return
+                return False
             if contact.get("blocked"):
                 self.notify(
                     "Contact is blocked.", severity="error"
                 )
-                return
+                return False
             if contact.get("pending") != 0:
                 self.notify(
                     "Contact is not accepted yet.",
                     severity="error",
                 )
-                return
+                return False
+            if (
+                self.db.get_verified_only()
+                and not contact.get("verified")
+            ):
+                self.notify(
+                    "Contact is not verified. Verify or "
+                    "disable verified-only mode.",
+                    severity="error",
+                )
+                return False
             if not contact.get("chat_started"):
                 self.notify(
                     "Chat not started. Press S to start it.",
                     severity="error",
                 )
-                return
+                return False
             if not contact.get("session_established"):
                 self.notify(
                     "No active session. Start chat first.",
                     severity="error",
                 )
-                return
+                return False
             if "\x00" in text:
                 self.notify(
                     "Message contains invalid characters.",
                     severity="error",
                 )
-                return
+                return False
             if len(text) > MAX_MESSAGE_LEN:
                 self.notify(
                     f"Message too long "
                     f"(max {MAX_MESSAGE_LEN}).",
                     severity="error",
                 )
-                return
+                return False
             ip, port = self._resolve_peer_address(contact)
             if not ip or not port:
                 self.notify(
                     "Contact is offline.", severity="error"
                 )
-                return
+                return False
             send_chain_hex = contact.get(
                 "send_chain_key_hex", ""
             )
@@ -3471,7 +4153,7 @@ class LanMessApp(App):
                     "No session chain. Restart chat.",
                     severity="error",
                 )
-                return
+                return False
             try:
                 send_chain = bytes.fromhex(send_chain_hex)
             except ValueError:
@@ -3479,7 +4161,7 @@ class LanMessApp(App):
                     "Corrupted chain. Restart chat.",
                     severity="error",
                 )
-                return
+                return False
             counter = contact.get("send_counter", 0) + 1
             msg_key = chain_message_key(send_chain)
             try:
@@ -3497,7 +4179,7 @@ class LanMessApp(App):
                 self.notify(
                     "Encryption failed.", severity="error"
                 )
-                return
+                return False
             signed_data = (
                 self.user_name.encode("utf-8")
                 + counter.to_bytes(8, "big")
@@ -3519,21 +4201,52 @@ class LanMessApp(App):
                     "ascii"
                 ),
             }
-            resp = await send_request(ip, port, payload)
-            if not resp or resp.get("type") != "OK":
+            if reply_to:
+                payload["reply_to"] = int(reply_to)
+            if react_to:
+                payload["react_to"] = int(react_to)
+            new_chain = chain_advance(send_chain)
+            try:
+                self.db.set_contact_state(
+                    contact_name,
+                    send_chain_key_hex=new_chain.hex(),
+                    send_counter=counter,
+                )
+            except Exception:
                 self.notify(
-                    "Message delivery failed.",
+                    "State update failed.",
                     severity="error",
                 )
-                return
-            new_chain = chain_advance(send_chain)
-            self.db.set_contact_state(
-                contact_name,
-                send_chain_key_hex=new_chain.hex(),
-                send_counter=counter,
+                return False
+            resp = await send_request(
+                ip, port, payload, timeout=MESSAGE_TIMEOUT
             )
-            self.db.add_message(contact_name, "out", text)
+            if not resp:
+                self.notify(
+                    "Message not delivered: no response "
+                    "(peer offline or blocking).",
+                    severity="error",
+                )
+                return False
+            rtype = resp.get("type")
+            if rtype != "OK":
+                reason = resp.get("reason", "unknown")
+                self.notify(
+                    f"Message rejected by peer: {reason}",
+                    severity="error",
+                )
+                return False
+            self.db.add_message(
+                contact_name,
+                "out",
+                text,
+                reply_to=reply_to,
+                react_to=react_to,
+            )
+            self._touch_activity(contact_name)
+            self._touch_heard(contact_name)
             self._refresh_visible_messages()
+            return True
 
     def clear_chat_confirm(self, contact_name):
         self.push_screen(
@@ -3626,6 +4339,7 @@ class LanMessApp(App):
                 severity="error",
             )
             return
+        self._touch_heard(contact_name)
         self._audit(
             "CLEAR_REQUEST_SENT",
             {"contact": contact_name},
@@ -3679,9 +4393,11 @@ class LanMessApp(App):
                         "timestamp": _now_ms(),
                     }
                 )
-                await send_request(
+                resp = await send_request(
                     ip, port, payload, timeout=STOP_TIMEOUT
                 )
+                if resp:
+                    self._touch_heard(contact_name)
             except Exception:
                 pass
         self.db.set_contact_state(
@@ -3696,6 +4412,7 @@ class LanMessApp(App):
             session_local_eph_sk_hex="",
             session_peer_eph_pub_hex="",
         )
+        self._last_activity.pop(contact_name, None)
         self._refresh_main()
         self._refresh_visible_messages()
         self.notify(
@@ -3738,6 +4455,12 @@ class LanMessApp(App):
         if confirmed:
             self.db.delete_contact(contact_name)
             self._contact_locks.pop(contact_name, None)
+            self._peer_typing.pop(contact_name, None)
+            self._last_activity.pop(contact_name, None)
+            self._last_heard.pop(contact_name, None)
+            self._last_typing_sent.pop(
+                contact_name, None
+            )
             screen = self._get_main_screen()
             if (
                 screen is not None
@@ -3772,6 +4495,10 @@ class LanMessApp(App):
         self._add_attempts = {}
         self._msg_attempts = {}
         self._contact_locks = {}
+        self._peer_typing = {}
+        self._last_activity = {}
+        self._last_heard = {}
+        self._last_typing_sent = {}
         while len(self.screen_stack) > 1:
             self.pop_screen()
         screen = self.screen

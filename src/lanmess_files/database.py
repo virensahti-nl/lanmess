@@ -9,6 +9,7 @@ import time
 from .config import (
     AUDIT_AAD_PREFIX,
     AUDIT_GENESIS_HMAC,
+    PIN_LOCKOUT_STEPS,
     PIN_SALT_BYTES,
     UNREAD_MAX,
     VAULT_AAD,
@@ -30,7 +31,7 @@ from .crypto import (
 )
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class Database:
@@ -89,11 +90,11 @@ class Database:
                 self._set_meta("schema_version", "1")
             elif version in (None, "1", "2"):
                 self._set_meta("schema_version", "3")
-            elif version == "5":
-                self._create_tables()
+            elif version in ("5", "6"):
                 self._set_meta(
                     "schema_version", str(SCHEMA_VERSION)
                 )
+                self._create_tables()
                 return
 
             self._create_tables()
@@ -137,6 +138,18 @@ class Database:
             "data_enc TEXT NOT NULL)"
         )
         self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS security ("
+            "id INTEGER PRIMARY KEY CHECK (id = 1),"
+            "failed_attempts INTEGER NOT NULL DEFAULT 0,"
+            "lockout_until REAL NOT NULL DEFAULT 0,"
+            "verified_only INTEGER NOT NULL DEFAULT 0,"
+            "notifications_enabled INTEGER NOT NULL DEFAULT 1,"
+            "presence_enabled INTEGER NOT NULL DEFAULT 1)"
+        )
+        self.conn.execute(
+            "INSERT OR IGNORE INTO security (id) VALUES (1)"
+        )
+        self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_contact "
             "ON messages(contact_id, id)"
         )
@@ -171,6 +184,93 @@ class Database:
 
     def set_schema_version(self, v):
         self._set_meta("schema_version", str(v))
+
+    def _security_row(self):
+        with self.lock:
+            try:
+                row = self.conn.execute(
+                    "SELECT failed_attempts, lockout_until, "
+                    "verified_only, notifications_enabled, "
+                    "presence_enabled "
+                    "FROM security WHERE id = 1"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                return None
+            return dict(row) if row else None
+
+    def _security_update(self, **kwargs):
+        with self.lock:
+            fields = []
+            values = []
+            for k, v in kwargs.items():
+                fields.append(f"{k}=?")
+                values.append(v)
+            if not fields:
+                return
+            self.conn.execute(
+                f"UPDATE security SET {', '.join(fields)} "
+                "WHERE id = 1",
+                values,
+            )
+            self.conn.commit()
+
+    def lockout_remaining(self):
+        row = self._security_row()
+        if not row:
+            return 0
+        return max(
+            0.0, float(row["lockout_until"]) - time.time()
+        )
+
+    def record_pin_failure(self):
+        with self.lock:
+            row = self._security_row()
+            if not row:
+                return 0.0
+            fails = int(row["failed_attempts"]) + 1
+            lockout = 0.0
+            for threshold, seconds in PIN_LOCKOUT_STEPS:
+                if fails >= threshold:
+                    lockout = time.time() + seconds
+            self._security_update(
+                failed_attempts=fails,
+                lockout_until=lockout,
+            )
+            return lockout
+
+    def record_pin_success(self):
+        self._security_update(
+            failed_attempts=0, lockout_until=0.0
+        )
+
+    def get_verified_only(self):
+        row = self._security_row()
+        return bool(row["verified_only"]) if row else False
+
+    def set_verified_only(self, v):
+        self._security_update(verified_only=1 if v else 0)
+
+    def get_notifications_enabled(self):
+        row = self._security_row()
+        return (
+            bool(row["notifications_enabled"]) if row else True
+        )
+
+    def set_notifications_enabled(self, v):
+        self._security_update(
+            notifications_enabled=1 if v else 0
+        )
+
+    def get_presence_enabled(self):
+        row = self._security_row()
+        return (
+            bool(row["presence_enabled"]) if row else True
+        )
+
+    def set_presence_enabled(self, v):
+        self._security_update(
+            presence_enabled=1 if v else 0
+        )
 
     def has_identity(self):
         with self.lock:
@@ -290,7 +390,9 @@ class Database:
                     return False
             else:
                 self.group_key = master
-            self.lookup_key = derive_lookup_key(self.group_key)
+            self.lookup_key = derive_lookup_key(
+                self.group_key
+            )
             return True
 
     def migrate_to_v5(self, old_master, pin):
@@ -345,7 +447,9 @@ class Database:
                         )
                         try:
                             cdata = decrypt_json(
-                                old_master, r["data_enc"], aad
+                                old_master,
+                                r["data_enc"],
+                                aad,
                             )
                         except Exception:
                             return None
@@ -368,6 +472,7 @@ class Database:
                         cdata.setdefault("recv_counter", 0)
                         cdata.setdefault("verified", 0)
                         cdata.setdefault("unread_count", 0)
+                        cdata.setdefault("pinned", 0)
                         new_ct = encrypt_json(
                             new_master, cdata, aad
                         )
@@ -383,10 +488,14 @@ class Database:
                         )
                         try:
                             mdata = decrypt_json(
-                                old_master, r["data_enc"], aad
+                                old_master,
+                                r["data_enc"],
+                                aad,
                             )
                         except Exception:
                             return None
+                        mdata.setdefault("reply_to", 0)
+                        mdata.setdefault("react_to", 0)
                         new_ct = encrypt_json(
                             new_master, mdata, aad
                         )
@@ -543,6 +652,7 @@ class Database:
                     "recv_counter": 0,
                     "verified": 0,
                     "unread_count": 0,
+                    "pinned": 0,
                     "added_at": float(
                         c.get("added_at", time.time())
                     ),
@@ -559,13 +669,17 @@ class Database:
                 name_to_id[name] = cur.lastrowid
 
             for m in messages_rows:
-                contact_id = name_to_id.get(m["contact_name"])
+                contact_id = name_to_id.get(
+                    m["contact_name"]
+                )
                 if not contact_id:
                     continue
                 msg_data = {
                     "direction": m["direction"],
                     "content": m["content"],
                     "timestamp": float(m["timestamp"]),
+                    "reply_to": 0,
+                    "react_to": 0,
                 }
                 aad = (
                     b"message:" + str(contact_id).encode()
@@ -609,7 +723,9 @@ class Database:
             x25519_private_to_bytes(x_sk).hex()
         )
         identity_data["x25519_public_hex"] = (
-            x25519_public_to_bytes(x_sk.public_key()).hex()
+            x25519_public_to_bytes(
+                x_sk.public_key()
+            ).hex()
         )
         identity_data.setdefault(
             "group_key_hex", group_key.hex()
@@ -653,6 +769,7 @@ class Database:
                 cdata.setdefault("recv_counter", 0)
                 cdata.setdefault("verified", 0)
                 cdata.setdefault("unread_count", 0)
+                cdata.setdefault("pinned", 0)
                 new_enc = encrypt_json(
                     group_key, cdata, aad
                 )
@@ -768,6 +885,9 @@ class Database:
                     data["unread_count"] = int(
                         data.get("unread_count", 0)
                     )
+                    data["pinned"] = int(
+                        data.get("pinned", 0)
+                    )
                     result.append(data)
                 except Exception:
                     continue
@@ -799,6 +919,9 @@ class Database:
                 data["_id"] = row["id"]
                 data["unread_count"] = int(
                     data.get("unread_count", 0)
+                )
+                data["pinned"] = int(
+                    data.get("pinned", 0)
                 )
                 return data
             except Exception:
@@ -837,7 +960,9 @@ class Database:
                 data["port"] = port
                 data["ed_public_hex"] = ed_public_hex
                 if x25519_public_hex is not None:
-                    data["x25519_public_hex"] = x25519_public_hex
+                    data["x25519_public_hex"] = (
+                        x25519_public_hex
+                    )
                 data["added_at"] = time.time()
                 enc = encrypt_json(self.key, data, aad)
                 self.conn.execute(
@@ -870,6 +995,7 @@ class Database:
                     "recv_counter": 0,
                     "verified": 0,
                     "unread_count": 0,
+                    "pinned": 0,
                     "added_at": time.time(),
                 }
                 enc = encrypt_json(self.key, data, aad)
@@ -916,6 +1042,7 @@ class Database:
                 "recv_counter",
                 "verified",
                 "unread_count",
+                "pinned",
             }
             for k in kwargs:
                 v = kwargs[k]
@@ -1059,7 +1186,14 @@ class Database:
         ).fetchone()
         return row["id"] if row else None
 
-    def add_message(self, contact_name, direction, content):
+    def add_message(
+        self,
+        contact_name,
+        direction,
+        content,
+        reply_to=0,
+        react_to=0,
+    ):
         with self.lock:
             if self.key is None:
                 return
@@ -1070,6 +1204,8 @@ class Database:
                 "direction": direction,
                 "content": content,
                 "timestamp": time.time(),
+                "reply_to": int(reply_to),
+                "react_to": int(react_to),
             }
             aad = b"message:" + str(contact_id).encode()
             enc = encrypt_json(self.key, data, aad)
@@ -1101,10 +1237,28 @@ class Database:
                     )
                     data["id"] = r["id"]
                     data["contact_name"] = contact_name
+                    data.setdefault("reply_to", 0)
+                    data.setdefault("react_to", 0)
                     results.append(data)
                 except Exception:
                     continue
             return list(reversed(results))
+
+    def search_messages(
+        self, contact_name, query, limit=50
+    ):
+        if not query:
+            return self.get_messages(
+                contact_name, limit=limit
+            )
+        q = query.lower()
+        results = []
+        for m in self.get_messages(contact_name, limit=500):
+            if q in m.get("content", "").lower():
+                results.append(m)
+                if len(results) >= limit:
+                    break
+        return results
 
     def clear_messages(self, contact_name):
         with self.lock:
@@ -1158,6 +1312,9 @@ class Database:
                 )
                 self.conn.execute(
                     "DROP TABLE IF EXISTS audit_log"
+                )
+                self.conn.execute(
+                    "DROP TABLE IF EXISTS security"
                 )
                 self.conn.execute(
                     "DROP TABLE IF EXISTS meta"
