@@ -50,6 +50,7 @@ from .config import (
     PIN_MAX_LEN,
     PIN_MIN_LEN,
     PRESENCE_INTERVAL,
+    PROBE_TIMEOUT,
     REPLAY_WINDOW_SECONDS,
     SEARCH_WAIT_SECONDS,
     SESSION_IDLE_TIMEOUT,
@@ -799,8 +800,7 @@ class HelpScreen(ModalScreen):
                 "  with Argon2id(PIN).\n"
                 "  HMAC-chained audit log.\n"
                 "  PIN lockout after 5 failures.\n"
-                "  Optional verified-only and idle\n"
-                "  session timeout.",
+                "  Live presence + typing indicators.",
                 id="help-content",
             )
             yield Button(
@@ -1133,6 +1133,7 @@ class ContactItem(ListItem):
         session_established,
         unread_count,
         online=False,
+        typing=False,
     ):
         parts = []
         if unread_count > 0:
@@ -1147,6 +1148,8 @@ class ContactItem(ListItem):
             parts.append("*")
         if online and session_established:
             parts.append("●")
+        if typing and session_established:
+            parts.append("(typing)")
         if pending == 2:
             parts.append("[accept?]")
         elif blocked:
@@ -1294,8 +1297,12 @@ class MainScreen(Screen):
 
     def _is_online(self, name):
         try:
-            ts = self.app._last_heard.get(name, 0)
-            return time.time() - ts < ONLINE_WINDOW
+            now = time.time()
+            heard = self.app._last_heard.get(name, 0)
+            offline = self.app._peer_offline.get(name, 0)
+            if offline > heard:
+                return False
+            return now - heard < ONLINE_WINDOW
         except Exception:
             return False
 
@@ -1383,6 +1390,7 @@ class MainScreen(Screen):
             c.get("session_established", 0),
             int(c.get("unread_count", 0)),
             online=self._is_online(c["name"]),
+            typing=self._is_typing(c["name"]),
         )
 
     def refresh_contacts(self, force=False):
@@ -1920,6 +1928,10 @@ class MainScreen(Screen):
                     asyncio.create_task(
                         self.app.broadcast_presence_now()
                     )
+                else:
+                    asyncio.create_task(
+                        self.app.broadcast_offline_now()
+                    )
         except Exception as e:
             self.app.notify(
                 f"Menu action failed: {e}",
@@ -2124,6 +2136,9 @@ class LanMessApp(App):
         self._peer_typing = {}
         self._last_activity = {}
         self._last_heard = {}
+        self._peer_offline = {}
+        self._presence_success = {}
+        self._presence_fail = {}
         self._last_typing_sent = {}
 
     def on_mount(self):
@@ -2147,6 +2162,10 @@ class LanMessApp(App):
         asyncio.create_task(self._graceful_shutdown())
 
     async def _graceful_shutdown(self):
+        try:
+            await self.broadcast_offline_now()
+        except Exception:
+            pass
         try:
             await self._stop_networking()
         except Exception:
@@ -2290,6 +2309,27 @@ class LanMessApp(App):
 
     def _touch_heard(self, name):
         self._last_heard[name] = time.time()
+        self._peer_offline.pop(name, None)
+        self._presence_fail.pop(name, None)
+
+    def _mark_offline(self, name):
+        self._peer_offline[name] = time.time()
+        self._last_heard[name] = 0
+        self._presence_success.pop(name, None)
+
+    def _record_probe_success(self, name):
+        succ = self._presence_success.get(name, 0) + 1
+        self._presence_success[name] = succ
+        if succ >= 2:
+            self._touch_heard(name)
+            self._refresh_main()
+
+    def _record_probe_failure(self, name):
+        fail = self._presence_fail.get(name, 0) + 1
+        self._presence_fail[name] = fail
+        if fail >= 2:
+            self._mark_offline(name)
+            self._refresh_main()
 
     async def create_identity(self, name, group_code, pin):
         group_key = await asyncio.to_thread(
@@ -2405,6 +2445,10 @@ class LanMessApp(App):
 
     async def lock(self):
         self._audit("LOCKED")
+        try:
+            await self.broadcast_offline_now()
+        except Exception:
+            pass
         await self._stop_networking()
         self._zero_keys()
         self.user_name = None
@@ -2415,6 +2459,9 @@ class LanMessApp(App):
         self._peer_typing = {}
         self._last_activity = {}
         self._last_heard = {}
+        self._peer_offline = {}
+        self._presence_success = {}
+        self._presence_fail = {}
         self._last_typing_sent = {}
         while len(self.screen_stack) > 1:
             self.pop_screen()
@@ -2500,6 +2547,13 @@ class LanMessApp(App):
                     identity["x25519_public_hex"]
                 )
             )
+            self._last_heard = {}
+            self._peer_offline = {}
+            self._peer_typing = {}
+            self._presence_success = {}
+            self._presence_fail = {}
+            self._last_activity = {}
+            self._last_typing_sent = {}
             self.tcp_port = int(identity["tcp_port"])
             self.server = Server(
                 self.tcp_port, self.handle_incoming
@@ -2576,19 +2630,50 @@ class LanMessApp(App):
                 return
             ip, port = self._resolve_peer_address(contact)
             if not ip or not port:
+                self._record_probe_failure(contact_name)
                 return
             payload = self._signed(
                 {
                     "type": "PRESENCE",
                     "from_name": self.user_name,
+                    "status": "online",
                     "timestamp": _now_ms(),
                 }
             )
-            resp = await send_request(
-                ip, port, payload, timeout=1.5
-            )
+            try:
+                resp = await send_request(
+                    ip, port, payload, timeout=PROBE_TIMEOUT
+                )
+            except Exception:
+                resp = None
             if resp and resp.get("type") == "OK":
-                self._touch_heard(contact_name)
+                self._record_probe_success(contact_name)
+            else:
+                self._record_probe_failure(contact_name)
+        except Exception:
+            self._record_probe_failure(contact_name)
+
+    async def _send_offline_now(self, contact_name):
+        try:
+            contact = self.db.get_contact(contact_name)
+            if not contact or not contact.get(
+                "session_established"
+            ):
+                return
+            ip, port = self._resolve_peer_address(contact)
+            if not ip or not port:
+                return
+            payload = self._signed(
+                {
+                    "type": "PRESENCE",
+                    "from_name": self.user_name,
+                    "status": "offline",
+                    "timestamp": _now_ms(),
+                }
+            )
+            await send_request(
+                ip, port, payload, timeout=PROBE_TIMEOUT
+            )
         except Exception:
             pass
 
@@ -2608,6 +2693,29 @@ class LanMessApp(App):
                 continue
             tasks.append(
                 self._send_presence_now(contact["name"])
+            )
+        if tasks:
+            try:
+                await asyncio.gather(
+                    *tasks, return_exceptions=True
+                )
+            except Exception:
+                pass
+
+    async def broadcast_offline_now(self):
+        try:
+            contacts = self.db.get_contacts()
+        except Exception:
+            return
+        tasks = []
+        for contact in contacts:
+            if not (
+                contact.get("chat_started")
+                and contact.get("session_established")
+            ):
+                continue
+            tasks.append(
+                self._send_offline_now(contact["name"])
             )
         if tasks:
             try:
@@ -2652,7 +2760,7 @@ class LanMessApp(App):
                 }
             )
             resp = await send_request(
-                ip, port, payload, timeout=1.0
+                ip, port, payload, timeout=PROBE_TIMEOUT
             )
             if resp and resp.get("type") == "OK":
                 self._touch_heard(contact_name)
@@ -3284,7 +3392,7 @@ class LanMessApp(App):
             )
         return {"type": "OK"}
 
-    async def _verify_peer_sig(self, msg):
+    async def _verify_peer_sig_no_touch(self, msg):
         from_name = msg.get("from_name")
         if not self._valid_name(from_name):
             return None
@@ -3302,9 +3410,14 @@ class LanMessApp(App):
         ts = msg.get("timestamp")
         if not self._valid_timestamp(ts):
             return None
-        self._touch_heard(from_name)
         self._apply_peer_ip(msg, from_name)
         contact = self.db.get_contact(from_name)
+        return contact
+
+    async def _verify_peer_sig(self, msg):
+        contact = await self._verify_peer_sig_no_touch(msg)
+        if contact:
+            self._touch_heard(contact["name"])
         return contact
 
     async def _handle_chat_start(self, msg):
@@ -3453,15 +3566,22 @@ class LanMessApp(App):
             session_local_eph_sk_hex="",
             session_peer_eph_pub_hex="",
         )
-        self._last_activity.pop(contact["name"], None)
+        name = contact["name"]
+        self._last_activity.pop(name, None)
+        self._last_heard.pop(name, None)
+        self._peer_offline.pop(name, None)
+        self._peer_typing.pop(name, None)
+        self._presence_success.pop(name, None)
+        self._presence_fail.pop(name, None)
+        self._last_typing_sent.pop(name, None)
         self._refresh_main()
         self._refresh_visible_messages()
         self.notify(
-            f"{contact['name']} stopped the chat."
+            f"{name} stopped the chat."
         )
         self._audit(
             "CHAT_STOP_RECEIVED",
-            {"contact": contact["name"]},
+            {"contact": name},
         )
         return {"type": "OK"}
 
@@ -3536,9 +3656,19 @@ class LanMessApp(App):
         return {"type": "OK"}
 
     async def _handle_presence(self, msg):
-        contact = await self._verify_peer_sig(msg)
+        contact = await self._verify_peer_sig_no_touch(msg)
         if not contact:
             return {"type": "OK"}
+        name = contact["name"]
+        status = msg.get("status", "online")
+        if status == "offline":
+            self._mark_offline(name)
+            self._refresh_main()
+            return {"type": "OK"}
+        self._touch_heard(name)
+        self._refresh_main()
+        if not self.db.get_presence_enabled():
+            return {"type": "ERROR", "reason": "presence_off"}
         return {"type": "OK"}
 
     async def _handle_typing(self, msg):
@@ -3760,6 +3890,8 @@ class LanMessApp(App):
             return
         ip, port = self._resolve_peer_address(contact)
         if not ip or not port:
+            self._mark_offline(contact_name)
+            self._refresh_main()
             self.notify(
                 "Contact is offline.", severity="error"
             )
@@ -3780,6 +3912,8 @@ class LanMessApp(App):
         )
         resp = await send_request(ip, port, payload)
         if not resp:
+            self._mark_offline(contact_name)
+            self._refresh_main()
             self.notify(
                 "Could not reach contact.",
                 severity="error",
@@ -4141,6 +4275,8 @@ class LanMessApp(App):
                 return False
             ip, port = self._resolve_peer_address(contact)
             if not ip or not port:
+                self._mark_offline(contact_name)
+                self._refresh_main()
                 self.notify(
                     "Contact is offline.", severity="error"
                 )
@@ -4222,6 +4358,8 @@ class LanMessApp(App):
                 ip, port, payload, timeout=MESSAGE_TIMEOUT
             )
             if not resp:
+                self._mark_offline(contact_name)
+                self._refresh_main()
                 self.notify(
                     "Message not delivered: no response "
                     "(peer offline or blocking).",
@@ -4413,6 +4551,14 @@ class LanMessApp(App):
             session_peer_eph_pub_hex="",
         )
         self._last_activity.pop(contact_name, None)
+        self._last_heard.pop(contact_name, None)
+        self._peer_offline.pop(contact_name, None)
+        self._peer_typing.pop(contact_name, None)
+        self._presence_success.pop(contact_name, None)
+        self._presence_fail.pop(contact_name, None)
+        self._last_typing_sent.pop(
+            contact_name, None
+        )
         self._refresh_main()
         self._refresh_visible_messages()
         self.notify(
@@ -4458,6 +4604,9 @@ class LanMessApp(App):
             self._peer_typing.pop(contact_name, None)
             self._last_activity.pop(contact_name, None)
             self._last_heard.pop(contact_name, None)
+            self._peer_offline.pop(contact_name, None)
+            self._presence_success.pop(contact_name, None)
+            self._presence_fail.pop(contact_name, None)
             self._last_typing_sent.pop(
                 contact_name, None
             )
@@ -4477,6 +4626,10 @@ class LanMessApp(App):
             )
 
     async def perform_reset(self):
+        try:
+            await self.broadcast_offline_now()
+        except Exception:
+            pass
         try:
             await self._stop_networking()
         except Exception:
@@ -4498,6 +4651,9 @@ class LanMessApp(App):
         self._peer_typing = {}
         self._last_activity = {}
         self._last_heard = {}
+        self._peer_offline = {}
+        self._presence_success = {}
+        self._presence_fail = {}
         self._last_typing_sent = {}
         while len(self.screen_stack) > 1:
             self.pop_screen()
