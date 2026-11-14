@@ -47,13 +47,19 @@ from .config import (
     MSG_RATE_LIMIT_SECONDS,
     NOTIFY_BODY_MAX,
     ONLINE_WINDOW,
+<<<<<<< HEAD
     OUTBOX_RETRY_INTERVAL,
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     PIN_MAX_LEN,
     PIN_MIN_LEN,
     PRESENCE_INTERVAL,
     PROBE_TIMEOUT,
     REPLAY_WINDOW_SECONDS,
+<<<<<<< HEAD
     SEARCH_LIMIT,
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     SEARCH_WAIT_SECONDS,
     SESSION_IDLE_TIMEOUT,
     STOP_TIMEOUT,
@@ -251,6 +257,7 @@ class ConfirmScreen(ModalScreen):
         self.dismiss(False)
 
 
+<<<<<<< HEAD
 class SearchScreen(ModalScreen):
     CSS = """
     SearchScreen { align: center middle; }
@@ -309,6 +316,8 @@ class SearchScreen(ModalScreen):
         self.dismiss()
 
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
 class AddCodeScreen(ModalScreen):
     CSS = """
     AddCodeScreen { align: center middle; }
@@ -567,6 +576,7 @@ class MyAddressScreen(ModalScreen):
         self.dismiss()
 
 
+<<<<<<< HEAD
 class PanicSettingsScreen(ModalScreen):
     CSS = """
     PanicSettingsScreen { align: center middle; }
@@ -633,6 +643,8 @@ class PanicSettingsScreen(ModalScreen):
         self.dismiss(None)
 
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
 class MenuScreen(ModalScreen):
     CSS = """
     MenuScreen { align: center middle; }
@@ -742,9 +754,12 @@ class MenuScreen(ModalScreen):
                     f"{'ON' if self.presence_enabled else 'OFF'}",
                     id="m-presence",
                 )
+<<<<<<< HEAD
                 yield Button(
                     "Set Panic Password", id="m-panic", variant="error"
                 )
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                 yield Static("Session", classes="menu-section")
                 yield Button(
                     "Show my address", id="m-address"
@@ -753,9 +768,12 @@ class MenuScreen(ModalScreen):
                     "Show add code (Ctrl+Z)", id="m-code"
                 )
                 yield Button(
+<<<<<<< HEAD
                     "Rotate Keys", id="m-rotate", variant="warning"
                 )
                 yield Button(
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                     "Lock (Ctrl+L)", id="m-lock"
                 )
                 yield Static("System", classes="menu-section")
@@ -915,7 +933,10 @@ class HelpScreen(ModalScreen):
                 "Keys:\n"
                 "  M          Open menu\n"
                 "  I          Add by IP\n"
+<<<<<<< HEAD
                 "  Ctrl+F     Search all messages\n"
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                 "  Ctrl+Z     Show add code\n"
                 "  Ctrl+L     Lock\n"
                 "  Ctrl+Q     Quit\n"
@@ -924,7 +945,11 @@ class HelpScreen(ModalScreen):
                 "  C/D/T/V    Clear/Delete/Stop/Verify\n"
                 "  Up/Down    Message history\n"
                 "\n"
+<<<<<<< HEAD
                 "Security (v1.1.11):\n"
+=======
+                "Security (v1.1.9):\n"
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                 "  Per-session X25519 + hash ratchet.\n"
                 "  Ed25519 signatures on every frame.\n"
                 "  256-byte padding on messages.\n"
@@ -933,11 +958,15 @@ class HelpScreen(ModalScreen):
                 "  with Argon2id(PIN).\n"
                 "  HMAC-chained audit log.\n"
                 "  PIN lockout after 5 failures.\n"
+<<<<<<< HEAD
                 "  Live presence + typing indicators.\n"
                 "  Manual IP pinning.\n"
                 "  Key Rotation via signed frames.\n"
                 "  Panic Password for plausible deniability.\n"
                 "  Automatic outbox retry queue.",
+=======
+                "  Live presence + typing indicators.",
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                 id="help-content",
             )
             yield Button(
@@ -1050,7 +1079,11 @@ class StartupScreen(Screen):
                 )
             elif self.state == "needs_vault":
                 yield Static(
+<<<<<<< HEAD
                     "Migrating to v1.1.11. Enter your old "
+=======
+                    "Migrating to v1.1.9. Enter your old "
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                     "group code once, then choose a PIN.",
                     id="startup-note",
                 )
@@ -1245,9 +1278,12 @@ class StartupScreen(Screen):
         if not pin:
             self._set_error("PIN required.")
             return
+<<<<<<< HEAD
         if self.db.check_panic_pin(pin):
             await self.app.panic_wipe()
             return
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         self._set_status("Unlocking (Argon2id)...")
         try:
             ok = await self.app.unlock(pin)
@@ -1353,7 +1389,10 @@ class MainScreen(Screen):
     BINDINGS = [
         Binding("ctrl+q", "quit_app", "Quit", show=True),
         Binding("ctrl+l", "lock", "Lock", show=True),
+<<<<<<< HEAD
         Binding("ctrl+f", "search", "Search", show=True),
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         Binding("m", "open_menu", "Menu", show=True),
         Binding("question_mark", "help", "Help", show=True),
         Binding("ctrl+z", "show_code", "Code", show=True),
@@ -1992,9 +2031,12 @@ class MainScreen(Screen):
             MyAddressScreen(ips, self.app.tcp_port)
         )
 
+<<<<<<< HEAD
     def action_search(self):
         self.app.push_screen(SearchScreen())
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     def action_open_menu(self):
         self.app.push_screen(
             MenuScreen(
@@ -2016,6 +2058,7 @@ class MainScreen(Screen):
             asyncio.create_task(
                 self._dispatch_async(action)
             )
+<<<<<<< HEAD
         elif action == "panic":
             self._do_set_panic()
         elif action == "rotate":
@@ -2045,6 +2088,11 @@ class MainScreen(Screen):
             ) if ok else None,
         )
 
+=======
+        else:
+            self._dispatch_sync(action)
+
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     def _dispatch_sync(self, action):
         try:
             if action == "stop":
@@ -2137,6 +2185,13 @@ class MainScreen(Screen):
         self.set_status("Starting chat...", token="start")
         try:
             await self.app.start_chat(self.current_contact)
+<<<<<<< HEAD
+=======
+        except Exception as e:
+            self.app.notify(
+                f"Start failed: {e}", severity="error"
+            )
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         finally:
             self.set_status("", token="start")
 
@@ -2287,7 +2342,10 @@ class LanMessApp(App):
         self.broadcast_task = None
         self.idle_task = None
         self.presence_task = None
+<<<<<<< HEAD
         self.outbox_task = None
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         self.group_key = None
         self.lookup_key = None
         self.totp_secret = None
@@ -2307,8 +2365,11 @@ class LanMessApp(App):
         self._presence_success = {}
         self._presence_fail = {}
         self._last_typing_sent = {}
+<<<<<<< HEAD
         self._outbox = {}
         self._pending_rotates = {}
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
 
     def on_mount(self):
         self.push_screen(StartupScreen(self.db))
@@ -2492,7 +2553,10 @@ class LanMessApp(App):
         if succ >= 2:
             self._touch_heard(name)
             self._refresh_main()
+<<<<<<< HEAD
             self._check_auto_reconnect(name)
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
 
     def _record_probe_failure(self, name):
         fail = self._presence_fail.get(name, 0) + 1
@@ -2501,6 +2565,7 @@ class LanMessApp(App):
             self._mark_offline(name)
             self._refresh_main()
 
+<<<<<<< HEAD
     def _check_auto_reconnect(self, name):
         contact = self.db.get_contact(name)
         if not contact:
@@ -2514,6 +2579,8 @@ class LanMessApp(App):
             x25519_public_to_bytes(self.x25519_public).hex(),
         )
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     async def create_identity(self, name, group_code, pin):
         group_key = await asyncio.to_thread(
             derive_group_key, group_code
@@ -2549,7 +2616,11 @@ class LanMessApp(App):
                 severity="error",
             )
             return
+<<<<<<< HEAD
         self.db.set_schema_version(8)
+=======
+        self.db.set_schema_version(7)
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         await self._start_session()
         self._audit("IDENTITY_CREATED", {"name": name})
 
@@ -2583,7 +2654,11 @@ class LanMessApp(App):
             if not ok:
                 return False
             await self._start_session()
+<<<<<<< HEAD
             self._audit("MIGRATED_TO_V8")
+=======
+            self._audit("MIGRATED_TO_V7")
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
             return True
         return False
 
@@ -2626,6 +2701,7 @@ class LanMessApp(App):
         await self._start_session()
         return True
 
+<<<<<<< HEAD
     async def panic_wipe(self):
         try:
             await self._stop_networking()
@@ -2651,6 +2727,8 @@ class LanMessApp(App):
             pass
         self.exit()
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     async def lock(self):
         self._audit("LOCKED")
         try:
@@ -2671,8 +2749,11 @@ class LanMessApp(App):
         self._presence_success = {}
         self._presence_fail = {}
         self._last_typing_sent = {}
+<<<<<<< HEAD
         self._outbox = {}
         self._pending_rotates = {}
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         while len(self.screen_stack) > 1:
             self.pop_screen()
         self.push_screen(StartupScreen(self.db))
@@ -2707,7 +2788,10 @@ class LanMessApp(App):
             "broadcast_task",
             "idle_task",
             "presence_task",
+<<<<<<< HEAD
             "outbox_task",
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         ):
             task = getattr(self, task_attr, None)
             if task is not None:
@@ -2765,7 +2849,10 @@ class LanMessApp(App):
             self._presence_fail = {}
             self._last_activity = {}
             self._last_typing_sent = {}
+<<<<<<< HEAD
             self._pending_rotates = {}
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
             self.tcp_port = int(identity["tcp_port"])
             self.server = Server(
                 self.tcp_port, self.handle_incoming
@@ -2785,7 +2872,16 @@ class LanMessApp(App):
                 self.discovery.broadcaster(
                     self.user_name,
                     self.tcp_port,
+<<<<<<< HEAD
                     self._get_current_pub_keys,
+=======
+                    ed_public_to_bytes(
+                        self.ed_public
+                    ).hex(),
+                    x25519_public_to_bytes(
+                        self.x25519_public
+                    ).hex(),
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                     self._current_code_tag,
                 )
             )
@@ -2795,9 +2891,12 @@ class LanMessApp(App):
             self.presence_task = asyncio.create_task(
                 self._presence_loop()
             )
+<<<<<<< HEAD
             self.outbox_task = asyncio.create_task(
                 self._outbox_loop()
             )
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
             self.push_screen(MainScreen())
             asyncio.create_task(
                 self.broadcast_presence_now()
@@ -2831,6 +2930,7 @@ class LanMessApp(App):
             except Exception:
                 pass
 
+<<<<<<< HEAD
     async def _outbox_loop(self):
         while True:
             try:
@@ -2855,11 +2955,14 @@ class LanMessApp(App):
             except Exception:
                 pass
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     async def _send_presence_now(self, contact_name):
         try:
             contact = self.db.get_contact(contact_name)
             if not contact:
                 return
+<<<<<<< HEAD
             
             if contact_name in self._pending_rotates:
                 payload = self._pending_rotates[contact_name]
@@ -2869,6 +2972,8 @@ class LanMessApp(App):
                     if resp:
                         del self._pending_rotates[contact_name]
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
             if not contact.get("session_established"):
                 return
             ip, port = self._resolve_peer_address(contact)
@@ -3019,6 +3124,7 @@ class LanMessApp(App):
         except Exception:
             return ""
 
+<<<<<<< HEAD
     async def rotate_keys(self):
         old_ed = self.ed_private
         new_ed = generate_ed25519_private()
@@ -3067,6 +3173,8 @@ class LanMessApp(App):
         self.notify("Keys rotated and broadcasted.")
         self._audit("KEYS_ROTATED")
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     def show_verify_screen(self, contact_name):
         contact = self.db.get_contact(contact_name)
         if not contact:
@@ -3377,8 +3485,11 @@ class LanMessApp(App):
                 return await self._handle_add_accept(msg)
             if t == "ADD_REJECT":
                 return await self._handle_add_reject(msg)
+<<<<<<< HEAD
             if t == "ROTATE":
                 return await self._handle_rotate(msg)
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
             if t == "CHAT_START":
                 return await self._handle_chat_start(msg)
             if t == "CHAT_ACCEPT":
@@ -3685,6 +3796,7 @@ class LanMessApp(App):
             )
         return {"type": "OK"}
 
+<<<<<<< HEAD
     async def _handle_rotate(self, msg):
         from_name = msg.get("from_name")
         if not self._valid_name(from_name):
@@ -3720,6 +3832,8 @@ class LanMessApp(App):
         self._refresh_visible_messages()
         return {"type": "OK"}
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     async def _verify_peer_sig_no_touch(self, msg):
         from_name = msg.get("from_name")
         if not self._valid_name(from_name):
@@ -3995,6 +4109,7 @@ class LanMessApp(App):
             return {"type": "OK"}
         self._touch_heard(name)
         self._refresh_main()
+<<<<<<< HEAD
         
         if name in self._pending_rotates:
             payload = self._pending_rotates[name]
@@ -4007,6 +4122,8 @@ class LanMessApp(App):
             except Exception:
                 pass
         
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         if not self.db.get_presence_enabled():
             return {"type": "ERROR", "reason": "presence_off"}
         return {"type": "OK"}
@@ -4225,7 +4342,11 @@ class LanMessApp(App):
                 severity="error",
             )
             return
+<<<<<<< HEAD
         if contact.get("chat_started") and contact.get("session_established"):
+=======
+        if contact.get("chat_started"):
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
             self.notify("Chat is already active.")
             return
         ip, port = self._resolve_peer_address(contact)
@@ -4562,7 +4683,10 @@ class LanMessApp(App):
         text,
         reply_to=0,
         react_to=0,
+<<<<<<< HEAD
         from_outbox=False
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     ):
         async with self._get_contact_lock(contact_name):
             contact = self.db.get_contact(contact_name)
@@ -4590,6 +4714,7 @@ class LanMessApp(App):
                 )
                 return False
             if not contact.get("chat_started"):
+<<<<<<< HEAD
                 if not from_outbox:
                     self.notify(
                         "Chat not started. Press S to start it.",
@@ -4602,6 +4727,18 @@ class LanMessApp(App):
                         "No active session. Start chat first.",
                         severity="error",
                     )
+=======
+                self.notify(
+                    "Chat not started. Press S to start it.",
+                    severity="error",
+                )
+                return False
+            if not contact.get("session_established"):
+                self.notify(
+                    "No active session. Start chat first.",
+                    severity="error",
+                )
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                 return False
             if "\x00" in text:
                 self.notify(
@@ -4620,10 +4757,16 @@ class LanMessApp(App):
             if not ip or not port:
                 self._mark_offline(contact_name)
                 self._refresh_main()
+<<<<<<< HEAD
                 if not from_outbox:
                     self.notify(
                         "Contact is offline.", severity="error"
                     )
+=======
+                self.notify(
+                    "Contact is offline.", severity="error"
+                )
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                 return False
             send_chain_hex = contact.get(
                 "send_chain_key_hex", ""
@@ -4704,6 +4847,7 @@ class LanMessApp(App):
             if not resp:
                 self._mark_offline(contact_name)
                 self._refresh_main()
+<<<<<<< HEAD
                 
                 if not from_outbox:
                     if contact_name not in self._outbox:
@@ -4728,6 +4872,14 @@ class LanMessApp(App):
                     return True
                 return False
                 
+=======
+                self.notify(
+                    "Message not delivered: no response "
+                    "(peer offline or blocking).",
+                    severity="error",
+                )
+                return False
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
             rtype = resp.get("type")
             if rtype != "OK":
                 reason = resp.get("reason", "unknown")
@@ -4921,8 +5073,11 @@ class LanMessApp(App):
         self._last_typing_sent.pop(
             contact_name, None
         )
+<<<<<<< HEAD
         self._outbox.pop(contact_name, None)
         self._pending_rotates.pop(contact_name, None)
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         self._refresh_main()
         self._refresh_visible_messages()
         self.notify(
@@ -4974,8 +5129,11 @@ class LanMessApp(App):
             self._last_typing_sent.pop(
                 contact_name, None
             )
+<<<<<<< HEAD
             self._outbox.pop(contact_name, None)
             self._pending_rotates.pop(contact_name, None)
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
             screen = self._get_main_screen()
             if (
                 screen is not None
@@ -5021,8 +5179,11 @@ class LanMessApp(App):
         self._presence_success = {}
         self._presence_fail = {}
         self._last_typing_sent = {}
+<<<<<<< HEAD
         self._outbox = {}
         self._pending_rotates = {}
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         while len(self.screen_stack) > 1:
             self.pop_screen()
         screen = self.screen

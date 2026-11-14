@@ -31,7 +31,11 @@ from .crypto import (
 )
 
 
+<<<<<<< HEAD
 SCHEMA_VERSION = 8
+=======
+SCHEMA_VERSION = 7
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
 
 
 class Database:
@@ -90,7 +94,11 @@ class Database:
                 self._set_meta("schema_version", "1")
             elif version in (None, "1", "2"):
                 self._set_meta("schema_version", "3")
+<<<<<<< HEAD
             elif version in ("5", "6", "7"):
+=======
+            elif version in ("5", "6"):
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                 self._set_meta(
                     "schema_version", str(SCHEMA_VERSION)
                 )
@@ -144,12 +152,17 @@ class Database:
             "lockout_until REAL NOT NULL DEFAULT 0,"
             "verified_only INTEGER NOT NULL DEFAULT 0,"
             "notifications_enabled INTEGER NOT NULL DEFAULT 1,"
+<<<<<<< HEAD
             "presence_enabled INTEGER NOT NULL DEFAULT 1,"
             "panic_pin_hash TEXT)"
+=======
+            "presence_enabled INTEGER NOT NULL DEFAULT 1)"
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         )
         self.conn.execute(
             "INSERT OR IGNORE INTO security (id) VALUES (1)"
         )
+<<<<<<< HEAD
         try:
             self.conn.execute(
                 "ALTER TABLE security ADD COLUMN "
@@ -157,6 +170,8 @@ class Database:
             )
         except sqlite3.OperationalError:
             pass
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_contact "
             "ON messages(contact_id, id)"
@@ -199,7 +214,11 @@ class Database:
                 row = self.conn.execute(
                     "SELECT failed_attempts, lockout_until, "
                     "verified_only, notifications_enabled, "
+<<<<<<< HEAD
                     "presence_enabled, panic_pin_hash "
+=======
+                    "presence_enabled "
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                     "FROM security WHERE id = 1"
                 ).fetchone()
             except sqlite3.OperationalError:
@@ -280,6 +299,7 @@ class Database:
             presence_enabled=1 if v else 0
         )
 
+<<<<<<< HEAD
     def set_panic_pin(self, pin):
         if not pin:
             self._security_update(panic_pin_hash=None)
@@ -296,6 +316,8 @@ class Database:
         h = hashlib.sha256(pin.encode("utf-8")).hexdigest()
         return hmac.compare_digest(h, row["panic_pin_hash"])
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     def has_identity(self):
         with self.lock:
             try:
@@ -840,6 +862,7 @@ class Database:
             )
             self.conn.commit()
 
+<<<<<<< HEAD
     def update_identity_keys(
         self, ed_private_hex, ed_public_hex,
         x25519_private_hex, x25519_public_hex
@@ -869,6 +892,8 @@ class Database:
             )
             self.conn.commit()
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     def get_identity(self):
         with self.lock:
             if self.key is None:
@@ -916,6 +941,7 @@ class Database:
             )
             self.conn.commit()
 
+<<<<<<< HEAD
     def clean_legacy_sessions(self):
         with self.lock:
             if self.key is None:
@@ -948,6 +974,8 @@ class Database:
                     )
             self.conn.commit()
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     def _name_hash(self, name):
         return compute_name_hash(self.lookup_key, name)
 
@@ -1091,6 +1119,7 @@ class Database:
                 )
             self.conn.commit()
 
+<<<<<<< HEAD
     def update_contact_keys(self, name, ed_hex, x_hex):
         with self.lock:
             contact = self.get_contact(name)
@@ -1107,6 +1136,8 @@ class Database:
             )
             self.conn.commit()
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     def set_contact_state(self, name, **kwargs):
         with self.lock:
             if (
@@ -1361,6 +1392,7 @@ class Database:
                     break
         return results
 
+<<<<<<< HEAD
     def search_all_messages(self, query, limit=50):
         if not query or self.key is None or self.lookup_key is None:
             return []
@@ -1387,6 +1419,8 @@ class Database:
                     break
         return results
 
+=======
+>>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
     def clear_messages(self, contact_name):
         with self.lock:
             contact_id = self._contact_id(contact_name)
