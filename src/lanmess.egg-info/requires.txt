@@ -1,9 +1,0 @@
-textual>=0.52.0
-cryptography>=41.0.0
-argon2-cffi>=23.1.0
-
-[:sys_platform == "win32"]
-winotify>=1.1.0
-
-[test]
-pytest>=7.0

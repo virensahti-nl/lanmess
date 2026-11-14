@@ -56,19 +56,12 @@ class Discovery:
         except Exception:
             sock.bind(("", 0))
         sock.setblocking(False)
-<<<<<<< HEAD
         (
             self.transport,
             _,
         ) = await loop.create_datagram_endpoint(
             lambda: _Protocol(self._on_packet),
             sock=sock,
-=======
-        (self.transport, _) = (
-            await loop.create_datagram_endpoint(
-                lambda: _Protocol(self._on_packet), sock=sock
-            )
->>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         )
 
     async def stop(self):
@@ -128,12 +121,7 @@ class Discovery:
         self,
         name,
         tcp_port,
-<<<<<<< HEAD
         get_pub_keys,
-=======
-        ed_pub_hex,
-        x25519_pub_hex,
->>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
         get_code_tag,
     ):
         sock = socket.socket(
@@ -148,19 +136,12 @@ class Discovery:
             sock.setblocking(False)
             while True:
                 try:
-<<<<<<< HEAD
                     ed_pub_hex, x25519_pub_hex = get_pub_keys()
-=======
->>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                     tag = get_code_tag()
                     payload = json.dumps(
                         {
                             "app": "lanmess",
-<<<<<<< HEAD
                             "version": 4,
-=======
-                            "version": 5,
->>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
                             "name": name,
                             "tcp_port": tcp_port,
                             "ed_pub": ed_pub_hex,

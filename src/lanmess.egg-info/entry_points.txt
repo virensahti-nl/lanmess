@@ -1,2 +1,0 @@
-[console_scripts]
-lanmess = lanmess_files.main:main

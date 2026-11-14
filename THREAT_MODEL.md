@@ -1,6 +1,5 @@
 # Threat Model
 
-<<<<<<< HEAD
 This document outlines the security guarantees of LANMess, what it defends against, what it explicitly does not defend against, and the roadmap for future security improvements.
 
 ## Defended Against
@@ -45,46 +44,3 @@ Discovery uses UDP broadcast and only travels within a single broadcast domain. 
 - **Duress / Decoy Account:** Upgrade the Panic Password from a "wipe" function to a "decoy" function, opening a plausible-looking empty vault instead of destroying the real one.
 - **Signed Release Tags:** Sign Git commits and PyPI releases to guarantee the software hasn't been tampered with.
 - **Independent Security Audit:** Commission a third-party review of the cryptographic implementation and threat model.
-=======
-## Defended
-
-- Passive LAN observer: message content and control payloads are encrypted.
-- Active LAN attacker without group code or static keys: every frame is signed.
-- Replay of captured messages: monotonic counters and one-way chain ratchet reject them.
-- Beacon brute-force: `code_tag` is HMACed with a lookup key derived from the group code.
-- First-contact MITM who knows the group code: challenge-response plus Ed25519 on every field.
-- Stolen database file: master is random per device, recoverable only via Argon2id(PIN).
-- Compromised static key after session end: session chains were ephemeral and forward-ratcheted.
-- Message-length inference: 256-byte padding.
-- Database row tampering: AES-GCM AAD per row.
-- Audit log tampering: HMAC-chained entries detect any modification.
-- Connection floods and slow-loris: rate limits, connection semaphore, frame caps.
-
-## Not defended
-
-- Rooted or unlocked device while logged in (in-memory keys readable by same UID).
-- Coerced PIN disclosure (no duress mode).
-- Traffic analysis of timing and packet volume on the wire (use a VPN if that matters).
-- Compromise of a peer's device (their copy of your messages is exposed).
-- First-contact MITM without out-of-band safety-number verification.
-- Key rotation and revocation (no protocol for replacing a peer's key on a live identity).
-- No independent audit has been performed.
-
-## Scope
-
-Discovery is UDP broadcast and only travels within a broadcast domain. To add
-peers across routed networks, use the add-by-IP flow. That flow bypasses
-discovery entirely and sends the signed add handshake directly to the address
-you provide; the transport is whatever the OS routing table resolves to. TLS
-is not used on the wire in either mode, so frame structure (sender name,
-counters, sizes, timing) remains visible to a passive observer on the path.
-
-## Roadmap to v2.0
-
-- Noise or TLS on the wire to hide frame structure.
-- Double Ratchet (Signal spec + test vectors) for post-compromise security.
-- Signed discovery beacons with TOFU pinning per peer name.
-- Session idle timeout.
-- Signed release tags and pinned dependency hashes.
-- Independent security audit.
->>>>>>> 92032534049ad11f9b247214e95cce07d24c9883
