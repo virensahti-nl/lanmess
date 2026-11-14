@@ -1,0 +1,142 @@
+Metadata-Version: 2.4
+Name: lanmess
+Version: 1.1.11
+Summary: LAN based end-to-end encrypted messenger with a TUI
+License-Expression: MIT
+Classifier: Programming Language :: Python :: 3
+Classifier: Environment :: Console
+Classifier: Topic :: Communications :: Chat
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: textual>=0.52.0
+Requires-Dist: cryptography>=41.0.0
+Requires-Dist: argon2-cffi>=23.1.0
+Requires-Dist: winotify>=1.1.0; sys_platform == "win32"
+Provides-Extra: test
+Requires-Dist: pytest>=7.0; extra == "test"
+Dynamic: license-file
+
+<div align="center">
+  <h1>LANMess</h1>
+  <p><strong>Serverless, end-to-end encrypted, terminal-based messenger for your LAN and beyond.</strong></p>
+
+  [![PyPI Version](https://img.shields.io/pypi/v/lanmess.svg)](https://pypi.org/project/lanmess/)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+  [![Python Versions](https://img.shields.io/pypi/pyversions/lanmess.svg)](https://pypi.org/project/lanmess/)
+</div>
+
+---
+
+**LANMess** is a secure, serverless, peer-to-peer messenger that runs entirely in your terminal. It automatically discovers peers on your local network or connects directly via IP (perfect for Tailscale, WireGuard, or routed LANs). All messages are end-to-end encrypted, and your local database is protected by a PIN and Argon2id.
+
+No servers. No cloud. No telemetry. Just pure, encrypted communication.
+
+## Features
+
+- **Zero-Knowledge Architecture:** Messages are encrypted with per-pair X25519 ECDH keys and AES-256-GCM. Ed25519 signatures prevent forgery.
+- **Serverless Discovery:** Automatically finds peers on the same broadcast domain using UDP multicast beacons.
+- **Tailscale / VPN Ready:** Add peers by IP and Port. Pinned addresses survive LAN changes and automatically route over your VPN.
+- **Data at Rest:** Your entire database (messages, contacts, identity) is encrypted using a random per-device master key, wrapped with your PIN via Argon2id.
+- **Panic Password:** Configure a secondary PIN that instantly wipes your local database and exits the app if you are ever forced to unlock your device.
+- **Key Rotation:** Compromised your keys? Rotate them seamlessly and notify your contacts via signed control frames.
+- **Auto-Reconnect & Outbox:** If a peer goes offline, your messages queue up. When they return, the session re-negotiates automatically and the outbox flushes.
+- **Live Presence & Typing:** See who is online (`●`) and when they are typing.
+- **Global Search UI:** Press `Ctrl+F` to search across all your messages and contacts.
+- **Cross-Platform Notifications:** Natively supports Linux, macOS, Windows, and Termux.
+- **Rich TUI:** A beautiful terminal interface with unread badges, replies, reactions, and command history.
+
+## Installation
+
+Requires **Python 3.9** or higher.
+
+```bash
+pip install lanmess
+```
+
+## Quick Start
+
+Start the application:
+```bash
+lanmess
+```
+
+### First Launch
+1. **Display Name:** Choose a name (e.g., `alice`).
+2. **Group Code:** A shared secret (min 12 chars). All peers must use the same group code to discover each other.
+3. **PIN:** A strong PIN to unlock your local database.
+
+*Note: You only type the group code once. From then on, you unlock the app with your PIN.*
+
+## Adding Contacts
+
+- **By Code (`A`):** Best for local LANs. Automatically finds the peer via broadcast discovery using their temporary 8-digit Add Code (`Ctrl+Z`).
+- **By IP (`I`):** Best for Tailscale or routed networks. Enter the peer's IP, Port, and Add Code manually. 
+
+*Add-by-IP addresses are **pinned**. They will not be overwritten if the peer's local LAN IP changes.*
+
+## Interface & Shortcuts
+
+### Global Keys
+| Key | Action |
+| :--- | :--- |
+| `M` | Open the main action menu |
+| `?` | Show help |
+| `Ctrl+Z` | Show your 8-digit Add Code |
+| `Ctrl+F` | Search all messages |
+| `Ctrl+L` | Lock the app (requires PIN to unlock) |
+| `Ctrl+Q` | Quit |
+
+### Chat Shortcuts
+| Key | Action |
+| :--- | :--- |
+| `A` | Focus the "Add by Code" input |
+| `S` | Start or Reconnect a chat |
+| `Y` / `X` | Accept / Reject chat requests |
+| `C` / `D` | Clear history / Delete contact |
+| `T` | Stop the current chat session |
+| `V` | Verify contact safety numbers |
+| `Up` / `Down` | Navigate your message history |
+
+### Slash Commands
+| Command | Action |
+| :--- | :--- |
+| `/help` | Show help |
+| `/find <text>` | Search messages with the current contact |
+| `/reply <id> <text>` | Reply to a specific message |
+| `/react <id> <emoji>` | React to a specific message |
+| `/clear` | Clear local history |
+| `/clearall` | Ask the peer to clear the history on both sides |
+| `/stop` | Stop the chat session |
+| `/del <id>` | Delete a specific message |
+
+## Security Model
+
+LANMess is designed to be secure against passive network observers and casual device access. 
+
+- **Signatures:** Every control frame (Add, Chat, Clear, Presence, Typing, Rotate) is signed with Ed25519.
+- **Forward Secrecy:** Session chains use a symmetric hash ratchet. Old chain keys are deleted from memory after use.
+- **Padding:** Messages are padded to 256-byte blocks to prevent length inference.
+- **Safety Numbers:** TOFU (Trust On First Use) is mitigated by displaying a 60-digit safety number. Press `V` to verify your peers out-of-band.
+- **Audit Log:** All security-relevant events (failed PINs, key rotations, signature failures) are stored in an HMAC-chained audit log inside your encrypted database.
+
+For a full breakdown of what is and isn't defended (including traffic analysis and compromised peers), please read [THREAT_MODEL.md](THREAT_MODEL.md).
+
+## Development
+
+To develop locally, clone the repo and install in editable mode with test dependencies:
+
+```bash
+git clone https://github.com/yourname/lanmess.git
+cd lanmess
+pip install -e ".[test]"
+```
+
+Run the test suite (251 tests):
+```bash
+pytest
+```
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
