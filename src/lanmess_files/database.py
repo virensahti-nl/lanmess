@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import json
@@ -9,6 +10,11 @@ import time
 from .config import (
     AUDIT_AAD_PREFIX,
     AUDIT_GENESIS_HMAC,
+    AUTO_LOCK_DEFAULT,
+    PANIC_AAD,
+    PANIC_MARKER,
+    PANIC_MARKER_BYTES,
+    PANIC_PREFIX_V10,
     PANIC_SALT_BYTES,
     PIN_LOCKOUT_STEPS,
     PIN_SALT_BYTES,
@@ -32,7 +38,7 @@ from .crypto import (
 )
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def _msg_aad_v1(contact_id):
@@ -105,8 +111,8 @@ class Database:
                 self._set_meta("schema_version", "1")
             elif version in (None, "1", "2"):
                 self._set_meta("schema_version", "3")
-            elif version in ("5", "6", "7", "8"):
-                if version == "8":
+            elif version in ("5", "6", "7", "8", "9"):
+                if version in ("5", "6", "7", "8"):
                     self._set_meta("msg_aad_version", "1")
                     try:
                         row = self.conn.execute(
@@ -179,7 +185,8 @@ class Database:
             "notifications_enabled INTEGER NOT NULL DEFAULT 1,"
             "presence_enabled INTEGER NOT NULL DEFAULT 1,"
             "panic_pin_hash TEXT,"
-            "panic_pin_salt BLOB)"
+            "panic_pin_salt BLOB,"
+            "auto_lock_seconds INTEGER NOT NULL DEFAULT 900)"
         )
         self.conn.execute(
             "INSERT OR IGNORE INTO security (id) VALUES (1)"
@@ -198,6 +205,23 @@ class Database:
             )
         except sqlite3.OperationalError:
             pass
+        try:
+            self.conn.execute(
+                "ALTER TABLE security ADD COLUMN "
+                "auto_lock_seconds INTEGER NOT NULL DEFAULT 900"
+            )
+        except sqlite3.OperationalError:
+            pass
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS blocked ("
+            "name_hash TEXT PRIMARY KEY,"
+            "data_enc TEXT NOT NULL)"
+        )
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS pending_rotates ("
+            "contact_name_hash TEXT PRIMARY KEY,"
+            "payload_enc TEXT NOT NULL)"
+        )
         try:
             self.conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_contact "
@@ -248,7 +272,7 @@ class Database:
                     "SELECT failed_attempts, lockout_until, "
                     "verified_only, notifications_enabled, "
                     "presence_enabled, panic_pin_hash, "
-                    "panic_pin_salt "
+                    "panic_pin_salt, auto_lock_seconds "
                     "FROM security WHERE id = 1"
                 ).fetchone()
             except sqlite3.OperationalError:
@@ -329,17 +353,39 @@ class Database:
             presence_enabled=1 if v else 0
         )
 
+    def get_auto_lock_seconds(self):
+        row = self._security_row()
+        if not row:
+            return AUTO_LOCK_DEFAULT
+        try:
+            return int(row.get("auto_lock_seconds", AUTO_LOCK_DEFAULT))
+        except Exception:
+            return AUTO_LOCK_DEFAULT
+
+    def set_auto_lock_seconds(self, v):
+        self._security_update(auto_lock_seconds=int(v))
+
     def set_panic_pin(self, pin):
         if not pin:
             self._security_update(
                 panic_pin_hash=None, panic_pin_salt=None
             )
             return
-        salt = os.urandom(PANIC_SALT_BYTES)
-        h = derive_pin_key(pin, salt).hex()
-        self._security_update(
-            panic_pin_hash=h, panic_pin_salt=salt
-        )
+        try:
+            salt = os.urandom(PANIC_SALT_BYTES)
+            key = derive_pin_key(pin, salt)
+            nonce = os.urandom(12)
+            ct = aes_gcm_encrypt(
+                key, PANIC_MARKER, nonce, PANIC_AAD
+            )
+            blob = PANIC_PREFIX_V10 + base64.b64encode(
+                nonce + ct
+            ).decode("ascii")
+            self._security_update(
+                panic_pin_hash=blob, panic_pin_salt=salt
+            )
+        except Exception:
+            pass
 
     def check_panic_pin(self, pin):
         if not pin:
@@ -347,21 +393,29 @@ class Database:
         row = self._security_row()
         if not row or not row["panic_pin_hash"]:
             return False
-        salt = row.get("panic_pin_salt")
-        if salt:
-            try:
-                h = derive_pin_key(
-                    pin, bytes(salt)
-                ).hex()
-            except Exception:
-                return False
-        else:
-            h = hashlib.sha256(
-                pin.encode("utf-8")
-            ).hexdigest()
-        return hmac.compare_digest(
-            h, row["panic_pin_hash"]
-        )
+        if not row["panic_pin_salt"]:
+            return False
+        try:
+            salt = bytes(row["panic_pin_salt"])
+            stored = row["panic_pin_hash"]
+            if isinstance(stored, bytes):
+                stored = stored.decode("ascii", "replace")
+            if stored.startswith(PANIC_PREFIX_V10):
+                payload = stored[len(PANIC_PREFIX_V10):]
+                blob = base64.b64decode(payload)
+                nonce = blob[:12]
+                ct = blob[12:]
+                key = derive_pin_key(pin, salt)
+                marker = aes_gcm_decrypt(
+                    key, nonce, ct, PANIC_AAD
+                )
+                return hmac.compare_digest(
+                    marker, PANIC_MARKER
+                )
+            h = derive_pin_key(pin, salt).hex()
+            return hmac.compare_digest(h, stored)
+        except Exception:
+            return False
 
     def has_identity(self):
         with self.lock:
@@ -528,7 +582,57 @@ class Database:
                     self.lookup_key = None
                     return False
                 self._set_meta("msg_aad_version", "2")
+            if self._get_meta("blocked_cleanup_v1") != "1":
+                try:
+                    self._cleanup_legacy_blocks()
+                except Exception:
+                    pass
+                self._set_meta("blocked_cleanup_v1", "1")
             return True
+
+    def _cleanup_legacy_blocks(self):
+        with self.lock:
+            if self.key is None:
+                return
+            for c in self.get_contacts():
+                if not c.get("blocked"):
+                    continue
+                if c.get("pending"):
+                    continue
+                if self.is_blocked(c["name"]):
+                    continue
+                has_block_audit = False
+                try:
+                    rows = self.conn.execute(
+                        "SELECT data_enc, prev_hmac FROM audit_log"
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    rows = []
+                for row in rows:
+                    aad = AUDIT_AAD_PREFIX + row[
+                        "prev_hmac"
+                    ].encode("utf-8")
+                    try:
+                        payload = decrypt_json(
+                            self.key, row["data_enc"], aad
+                        )
+                    except Exception:
+                        continue
+                    if (
+                        payload.get("type") == "BLOCKED_LOCAL"
+                        and payload.get("detail", {}).get(
+                            "contact"
+                        ) == c["name"]
+                    ):
+                        has_block_audit = True
+                        break
+                if has_block_audit:
+                    continue
+                self.set_contact_state(c["name"], blocked=0)
+                self.append_audit(
+                    "UNBLOCKED_UPGRADE",
+                    {"contact": c["name"]},
+                )
 
     def migrate_to_v5(self, old_master, pin):
         with self.lock:
@@ -1312,6 +1416,138 @@ class Database:
             for c in self.get_contacts()
         )
 
+    def add_blocked(self, name, ed_public_hex, reason="user"):
+        with self.lock:
+            if (
+                not name
+                or self.key is None
+                or self.lookup_key is None
+            ):
+                return
+            name_hash = self._name_hash(name)
+            aad = b"blocked:" + name_hash.encode()
+            data = {
+                "name": name,
+                "ed_public_hex": ed_public_hex,
+                "blocked_at": time.time(),
+                "reason": reason,
+            }
+            enc = encrypt_json(self.key, data, aad)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO blocked "
+                "(name_hash, data_enc) VALUES (?, ?)",
+                (name_hash, enc),
+            )
+            self.conn.commit()
+
+    def remove_blocked(self, name):
+        with self.lock:
+            if not name or self.lookup_key is None:
+                return
+            name_hash = self._name_hash(name)
+            self.conn.execute(
+                "DELETE FROM blocked WHERE name_hash = ?",
+                (name_hash,),
+            )
+            self.conn.commit()
+
+    def is_blocked(self, name):
+        with self.lock:
+            if not name or self.lookup_key is None:
+                return False
+            try:
+                name_hash = self._name_hash(name)
+                row = self.conn.execute(
+                    "SELECT 1 FROM blocked WHERE name_hash = ?",
+                    (name_hash,),
+                ).fetchone()
+                return row is not None
+            except sqlite3.OperationalError:
+                return False
+
+    def get_blocked(self):
+        with self.lock:
+            if self.key is None or self.lookup_key is None:
+                return []
+            result = []
+            try:
+                rows = self.conn.execute(
+                    "SELECT name_hash, data_enc FROM blocked"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return []
+            for row in rows:
+                aad = b"blocked:" + row["name_hash"].encode()
+                try:
+                    data = decrypt_json(
+                        self.key, row["data_enc"], aad
+                    )
+                    result.append(data)
+                except Exception:
+                    continue
+            result.sort(key=lambda x: x.get("name", ""))
+            return result
+
+    def save_pending_rotate(self, contact_name, payload):
+        with self.lock:
+            if (
+                self.key is None
+                or self.lookup_key is None
+                or not contact_name
+            ):
+                return
+            name_hash = self._name_hash(contact_name)
+            aad = b"pending_rotate:" + name_hash.encode()
+            enc = encrypt_json(self.key, payload, aad)
+            self.conn.execute(
+                "INSERT OR REPLACE INTO pending_rotates "
+                "(contact_name_hash, payload_enc) VALUES (?, ?)",
+                (name_hash, enc),
+            )
+            self.conn.commit()
+
+    def load_pending_rotates(self):
+        with self.lock:
+            if self.key is None or self.lookup_key is None:
+                return {}
+            try:
+                rows = self.conn.execute(
+                    "SELECT contact_name_hash, payload_enc "
+                    "FROM pending_rotates"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return {}
+            result = {}
+            for row in rows:
+                aad = b"pending_rotate:" + row[
+                    "contact_name_hash"
+                ].encode()
+                try:
+                    payload = decrypt_json(
+                        self.key, row["payload_enc"], aad
+                    )
+                    name = payload.get("from_name")
+                    if name:
+                        result[name] = payload
+                except Exception:
+                    continue
+            return result
+
+    def delete_pending_rotate(self, contact_name):
+        with self.lock:
+            if not contact_name or self.lookup_key is None:
+                return
+            try:
+                name_hash = self._name_hash(contact_name)
+                self.conn.execute(
+                    "DELETE FROM pending_rotates "
+                    "WHERE contact_name_hash = ?",
+                    (name_hash,),
+                )
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass
+
     def _last_audit_hmac(self):
         try:
             row = self.conn.execute(
@@ -1429,30 +1665,102 @@ class Database:
     ):
         with self.lock:
             if self.key is None:
-                return
+                return False
             contact_id = self._contact_id(contact_name)
             if not contact_id:
-                return
+                return False
+            try:
+                data = {
+                    "direction": direction,
+                    "content": content,
+                    "timestamp": time.time(),
+                    "reply_to": int(reply_to),
+                    "react_to": int(react_to),
+                }
+                cur = self.conn.execute(
+                    "INSERT INTO messages "
+                    "(contact_id, data_enc) VALUES (?, ?)",
+                    (contact_id, ""),
+                )
+                row_id = cur.lastrowid
+                aad = _msg_aad_v2(contact_id, row_id)
+                enc = encrypt_json(self.key, data, aad)
+                self.conn.execute(
+                    "UPDATE messages SET data_enc = ? WHERE id = ?",
+                    (enc, row_id),
+                )
+                self.conn.commit()
+                return True
+            except Exception:
+                return False
+
+    def commit_incoming_message(
+        self,
+        contact_name,
+        content,
+        reply_to,
+        react_to,
+        new_recv_chain_hex,
+        new_recv_counter,
+    ):
+        with self.lock:
+            if self.key is None:
+                return False
+            contact_id = self._contact_id(contact_name)
+            if not contact_id:
+                return False
+            name_hash = self._name_hash(contact_name)
+            contact_aad = b"contact:" + name_hash.encode()
+            row = self.conn.execute(
+                "SELECT id, data_enc FROM contacts "
+                "WHERE name_hash = ?",
+                (name_hash,),
+            ).fetchone()
+            if not row:
+                return False
+            try:
+                cdata = decrypt_json(
+                    self.key, row["data_enc"], contact_aad
+                )
+            except Exception:
+                return False
             data = {
-                "direction": direction,
+                "direction": "in",
                 "content": content,
                 "timestamp": time.time(),
                 "reply_to": int(reply_to),
                 "react_to": int(react_to),
             }
-            cur = self.conn.execute(
-                "INSERT INTO messages (contact_id, data_enc) "
-                "VALUES (?, ?)",
-                (contact_id, ""),
-            )
-            row_id = cur.lastrowid
-            aad = _msg_aad_v2(contact_id, row_id)
-            enc = encrypt_json(self.key, data, aad)
-            self.conn.execute(
-                "UPDATE messages SET data_enc = ? WHERE id = ?",
-                (enc, row_id),
-            )
-            self.conn.commit()
+            cdata["recv_chain_key_hex"] = new_recv_chain_hex
+            cdata["recv_counter"] = int(new_recv_counter)
+            try:
+                with self.conn:
+                    cur = self.conn.execute(
+                        "INSERT INTO messages "
+                        "(contact_id, data_enc) VALUES (?, ?)",
+                        (contact_id, ""),
+                    )
+                    row_id = cur.lastrowid
+                    msg_aad = _msg_aad_v2(contact_id, row_id)
+                    msg_enc = encrypt_json(
+                        self.key, data, msg_aad
+                    )
+                    self.conn.execute(
+                        "UPDATE messages SET data_enc = ? "
+                        "WHERE id = ?",
+                        (msg_enc, row_id),
+                    )
+                    contact_enc = encrypt_json(
+                        self.key, cdata, contact_aad
+                    )
+                    self.conn.execute(
+                        "UPDATE contacts SET data_enc = ? "
+                        "WHERE id = ?",
+                        (contact_enc, row["id"]),
+                    )
+                return True
+            except Exception:
+                return False
 
     def _decode_msg_row(self, r, contact_id, contact_name):
         aad = _msg_aad_v2(contact_id, r["id"])
@@ -1474,7 +1782,9 @@ class Database:
         data.setdefault("react_to", 0)
         return data
 
-    def get_messages(self, contact_name, limit=500):
+    def get_messages(
+        self, contact_name, limit=500, before_id=None
+    ):
         with self.lock:
             if self.key is None or not contact_name:
                 return []
@@ -1482,12 +1792,21 @@ class Database:
             if not contact_id:
                 return []
             results = []
-            for r in self.conn.execute(
-                "SELECT id, data_enc FROM messages "
-                "WHERE contact_id = ? "
-                "ORDER BY id DESC LIMIT ?",
-                (contact_id, limit),
-            ):
+            if before_id is not None:
+                query = (
+                    "SELECT id, data_enc FROM messages "
+                    "WHERE contact_id = ? AND id < ? "
+                    "ORDER BY id DESC LIMIT ?"
+                )
+                params = (contact_id, before_id, limit)
+            else:
+                query = (
+                    "SELECT id, data_enc FROM messages "
+                    "WHERE contact_id = ? "
+                    "ORDER BY id DESC LIMIT ?"
+                )
+                params = (contact_id, limit)
+            for r in self.conn.execute(query, params):
                 data = self._decode_msg_row(
                     r, contact_id, contact_name
                 )
@@ -1592,6 +1911,12 @@ class Database:
                     "DROP TABLE IF EXISTS security"
                 )
                 self.conn.execute(
+                    "DROP TABLE IF EXISTS blocked"
+                )
+                self.conn.execute(
+                    "DROP TABLE IF EXISTS pending_rotates"
+                )
+                self.conn.execute(
                     "DROP TABLE IF EXISTS meta"
                 )
                 self.conn.commit()
@@ -1602,6 +1927,7 @@ class Database:
                 "schema_version", str(SCHEMA_VERSION)
             )
             self._set_meta("msg_aad_version", "2")
+            self._set_meta("blocked_cleanup_v1", "1")
             self.key = None
             self.group_key = None
             self.lookup_key = None

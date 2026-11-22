@@ -13,22 +13,13 @@ import lanmess_files.tui as _tui
 from textual.app import App
 
 from ..config import (
-    ADD_RATE_LIMIT_MAX,
-    ADD_RATE_LIMIT_SECONDS,
     APP_NAME,
     APP_VERSION,
     CONTROL_SIG_PREFIX,
     DB_PATH,
-    MAX_GROUP_CODE_LEN,
     MAX_MESSAGE_LEN,
     MESSAGE_TIMEOUT,
-    MIN_GROUP_CODE_LEN,
-    MSG_RATE_LIMIT_MAX,
-    MSG_RATE_LIMIT_SECONDS,
-    NOTIFY_BODY_MAX,
     OUTBOX_RETRY_INTERVAL,
-    PIN_MAX_LEN,
-    PIN_MIN_LEN,
     PRESENCE_INTERVAL,
     PROBE_TIMEOUT,
     REPLAY_WINDOW_SECONDS,
@@ -68,7 +59,10 @@ from ..database import Database
 from ..discovery import Discovery
 from ..network import Server
 from .app_handlers import HandlersMixin
-from .helpers import _now_ms
+from .helpers import (
+    _check_pin_strength,
+    _now_ms,
+)
 from .main_screen import MainScreen
 from .screens import (
     ConfirmScreen,
@@ -107,6 +101,7 @@ class LanMessApp(HandlersMixin, App):
         self.user_name = None
         self.tcp_port = None
         self._add_attempts = {}
+        self._name_attempts = {}
         self._msg_attempts = {}
         self._contact_locks = {}
         self._peer_typing = {}
@@ -118,6 +113,8 @@ class LanMessApp(HandlersMixin, App):
         self._last_typing_sent = {}
         self._outbox = {}
         self._pending_rotates = {}
+        self._global_last_activity = time.time()
+        self._auto_lock_in_progress = False
 
     def on_mount(self):
         self.push_screen(StartupScreen(self.db))
@@ -284,6 +281,7 @@ class LanMessApp(HandlersMixin, App):
 
     def _touch_activity(self, name):
         self._last_activity[name] = time.time()
+        self._global_last_activity = time.time()
 
     def _touch_heard(self, name):
         self._last_heard[name] = time.time()
@@ -325,6 +323,30 @@ class LanMessApp(HandlersMixin, App):
             x25519_public_to_bytes(self.x25519_public).hex(),
         )
 
+    def _is_blocked(self, name):
+        if not name:
+            return False
+        if self.db.is_blocked(name):
+            return True
+        contact = self.db.get_contact(name)
+        if contact and contact.get("blocked"):
+            return True
+        return False
+
+    def _should_auto_lock(self, now=None):
+        if now is None:
+            now = time.time()
+        try:
+            seconds = self.db.get_auto_lock_seconds()
+        except Exception:
+            return False
+        if seconds <= 0:
+            return False
+        if not self.user_name:
+            return False
+        last = getattr(self, "_global_last_activity", now)
+        return (now - last) > seconds
+
     async def create_identity(self, name, group_code, pin):
         group_key = await asyncio.to_thread(
             derive_group_key, group_code
@@ -360,7 +382,7 @@ class LanMessApp(HandlersMixin, App):
                 severity="error",
             )
             return
-        self.db.set_schema_version(9)
+        self.db.set_schema_version(10)
         await self._start_session()
         self._audit("IDENTITY_CREATED", {"name": name})
 
@@ -394,7 +416,7 @@ class LanMessApp(HandlersMixin, App):
             if not ok:
                 return False
             await self._start_session()
-            self._audit("MIGRATED_TO_V9")
+            self._audit("MIGRATED_TO_V10")
             return True
         return False
 
@@ -445,6 +467,27 @@ class LanMessApp(HandlersMixin, App):
         await self._start_session()
         return True
 
+    async def change_pin(self, old_pin, new_pin):
+        if self.db.key is None:
+            return False
+        err = _check_pin_strength(new_pin)
+        if err:
+            return False
+        current = await asyncio.to_thread(
+            self.db.unlock_vault, old_pin
+        )
+        if current is None:
+            return False
+        if current != self.db.key:
+            return False
+        ok = await asyncio.to_thread(
+            self.db.setup_vault, self.db.key, new_pin
+        )
+        if not ok:
+            return False
+        self._audit("PIN_CHANGED")
+        return True
+
     async def panic_wipe(self):
         try:
             await self._stop_networking()
@@ -481,6 +524,7 @@ class LanMessApp(HandlersMixin, App):
         self.user_name = None
         self.tcp_port = None
         self._add_attempts = {}
+        self._name_attempts = {}
         self._msg_attempts = {}
         self._contact_locks = {}
         self._peer_typing = {}
@@ -492,6 +536,7 @@ class LanMessApp(HandlersMixin, App):
         self._last_typing_sent = {}
         self._outbox = {}
         self._pending_rotates = {}
+        self._auto_lock_in_progress = False
         while len(self.screen_stack) > 1:
             self.pop_screen()
         self.push_screen(StartupScreen(self.db))
@@ -584,7 +629,13 @@ class LanMessApp(HandlersMixin, App):
             self._presence_fail = {}
             self._last_activity = {}
             self._last_typing_sent = {}
-            self._pending_rotates = {}
+            self._name_attempts = {}
+            try:
+                self._pending_rotates = self.db.load_pending_rotates()
+            except Exception:
+                self._pending_rotates = {}
+            self._global_last_activity = time.time()
+            self._auto_lock_in_progress = False
             self.tcp_port = int(identity["tcp_port"])
             self.server = Server(
                 self.tcp_port, self.handle_incoming
@@ -629,8 +680,20 @@ class LanMessApp(HandlersMixin, App):
     async def _idle_watchdog(self):
         while True:
             try:
-                await asyncio.sleep(60)
+                await asyncio.sleep(30)
                 now = time.time()
+                if (
+                    self.user_name
+                    and not self._auto_lock_in_progress
+                    and self._should_auto_lock(now)
+                ):
+                    self._auto_lock_in_progress = True
+                    self.notify(
+                        "Auto-locking due to inactivity.",
+                        timeout=3,
+                    )
+                    asyncio.create_task(self.lock())
+                    continue
                 for name, t in list(
                     self._last_activity.items()
                 ):
@@ -656,13 +719,20 @@ class LanMessApp(HandlersMixin, App):
                 await asyncio.sleep(OUTBOX_RETRY_INTERVAL)
                 if not self._outbox:
                     continue
-                for name, msgs in list(self._outbox.items()):
+                for name in list(self._outbox.keys()):
                     contact = self.db.get_contact(name)
-                    if not contact or not contact.get(
-                        "session_established"
-                    ):
+                    if not contact or contact.get("blocked"):
+                        self._outbox.pop(name, None)
                         continue
-                    for msg in list(msgs):
+                    if self.db.is_blocked(name):
+                        self._outbox.pop(name, None)
+                        continue
+                    if contact.get("pending") != 0:
+                        self._outbox.pop(name, None)
+                        continue
+                    if not contact.get("session_established"):
+                        continue
+                    for msg in list(self._outbox.get(name, [])):
                         ok = await self.send_chat_message(
                             name, msg["text"],
                             reply_to=msg["reply_to"],
@@ -694,7 +764,15 @@ class LanMessApp(HandlersMixin, App):
                         timeout=PROBE_TIMEOUT
                     )
                     if resp:
-                        del self._pending_rotates[contact_name]
+                        self._pending_rotates.pop(
+                            contact_name, None
+                        )
+                        try:
+                            self.db.delete_pending_rotate(
+                                contact_name
+                            )
+                        except Exception:
+                            pass
 
             if not contact.get("session_established"):
                 return
@@ -806,10 +884,15 @@ class LanMessApp(HandlersMixin, App):
                 pass
 
     async def send_typing(self, contact_name):
+        self._global_last_activity = time.time()
         contact = self.db.get_contact(contact_name)
         if not contact:
             return
         if not contact.get("session_established"):
+            return
+        if contact.get("blocked") or self.db.is_blocked(
+            contact_name
+        ):
             return
         now = time.time()
         last = self._last_typing_sent.get(
@@ -899,6 +982,8 @@ class LanMessApp(HandlersMixin, App):
         for c in self.db.get_contacts():
             if c.get("blocked"):
                 continue
+            if self.db.is_blocked(c["name"]):
+                continue
             try:
                 ip, port = self._resolve_peer_address(c)
                 if ip and port:
@@ -906,14 +991,135 @@ class LanMessApp(HandlersMixin, App):
                         ip, port, payload, timeout=2.0
                     )
                     if not resp:
-                        self._pending_rotates[c["name"]] = payload
+                        self._pending_rotates[
+                            c["name"]
+                        ] = payload
+                        try:
+                            self.db.save_pending_rotate(
+                                c["name"], payload
+                            )
+                        except Exception:
+                            pass
                 else:
                     self._pending_rotates[c["name"]] = payload
+                    try:
+                        self.db.save_pending_rotate(
+                            c["name"], payload
+                        )
+                    except Exception:
+                        pass
             except Exception:
                 self._pending_rotates[c["name"]] = payload
+                try:
+                    self.db.save_pending_rotate(
+                        c["name"], payload
+                    )
+                except Exception:
+                    pass
 
         self.notify("Keys rotated and broadcasted.")
         self._audit("KEYS_ROTATED")
+
+    async def retry_pending_rotations(self):
+        if not self._pending_rotates:
+            self.notify("No pending rotations.")
+            return
+        delivered = 0
+        failed = 0
+        dropped = 0
+        for name, payload in list(self._pending_rotates.items()):
+            contact = self.db.get_contact(name)
+            if not contact:
+                self._pending_rotates.pop(name, None)
+                try:
+                    self.db.delete_pending_rotate(name)
+                except Exception:
+                    pass
+                dropped += 1
+                continue
+            if contact.get("blocked") or self.db.is_blocked(name):
+                failed += 1
+                continue
+            ip, port = self._resolve_peer_address(contact)
+            if not ip or not port:
+                failed += 1
+                continue
+            try:
+                resp = await send_request(
+                    ip, port, payload, timeout=PROBE_TIMEOUT
+                )
+                if resp:
+                    self._pending_rotates.pop(name, None)
+                    try:
+                        self.db.delete_pending_rotate(name)
+                    except Exception:
+                        pass
+                    delivered += 1
+                else:
+                    failed += 1
+            except Exception:
+                failed += 1
+        msg = f"Rotations: {delivered} delivered, {failed} pending"
+        if dropped:
+            msg += f", {dropped} dropped"
+        msg += "."
+        self.notify(msg)
+
+    async def block_contact(self, name):
+        contact = self.db.get_contact(name)
+        if not contact:
+            self.notify(
+                f"Contact {name} not found.",
+                severity="error",
+            )
+            return
+        if contact.get("blocked") or self.db.is_blocked(name):
+            self.notify(
+                f"{name} is already blocked.",
+                severity="warning",
+            )
+            return
+        if contact.get("chat_started"):
+            try:
+                await self.stop_chat(name)
+            except Exception:
+                pass
+        self.db.set_contact_state(name, blocked=1)
+        try:
+            self.db.add_blocked(
+                name, contact.get("ed_public_hex", "")
+            )
+        except Exception:
+            pass
+        self._audit("BLOCKED_LOCAL", {"contact": name})
+        self._refresh_main()
+        self._refresh_visible_messages()
+        self.notify(f"Blocked {name}.")
+
+    async def unblock_contact(self, name):
+        contact = self.db.get_contact(name)
+        in_table = self.db.is_blocked(name)
+        if not in_table and (not contact or not contact.get(
+            "blocked"
+        )):
+            self.notify(
+                f"{name} is not blocked.",
+                severity="warning",
+            )
+            return
+        try:
+            self.db.remove_blocked(name)
+        except Exception:
+            pass
+    
+        if hasattr(self, "_name_attempts"):
+            self._name_attempts.pop(name, None)
+        if contact:
+            self.db.set_contact_state(name, blocked=0)
+        self._audit("UNBLOCKED_LOCAL", {"contact": name})
+        self._refresh_main()
+        self._refresh_visible_messages()
+        self.notify(f"Unblocked {name}.")
 
     def show_verify_screen(self, contact_name):
         contact = self.db.get_contact(contact_name)
@@ -1119,6 +1325,13 @@ class LanMessApp(HandlersMixin, App):
             )
             return False
         contact_name = expected_found_name or to_name
+        if self.db.is_blocked(contact_name):
+            self.notify(
+                f"{contact_name} is blocked. "
+                "Unblock first.",
+                severity="error",
+            )
+            return False
         existing = self.db.get_contact(contact_name)
         if (
             existing
@@ -1220,7 +1433,9 @@ class LanMessApp(HandlersMixin, App):
         contact = self.db.get_contact(contact_name)
         if not contact:
             return
-        if contact.get("blocked"):
+        if contact.get("blocked") or self.db.is_blocked(
+            contact_name
+        ):
             self.notify(
                 "Contact is blocked.", severity="error"
             )
@@ -1282,6 +1497,11 @@ class LanMessApp(HandlersMixin, App):
             if reason == "unverified":
                 self.notify(
                     "Peer rejected: contact unverified.",
+                    severity="error",
+                )
+            elif reason == "blocked":
+                self.notify(
+                    "Peer rejected: blocked.",
                     severity="error",
                 )
             else:
@@ -1363,6 +1583,20 @@ class LanMessApp(HandlersMixin, App):
             )
             await send_request(ip, port, payload)
         self.db.delete_contact(contact_name)
+        self._contact_locks.pop(contact_name, None)
+        self._peer_typing.pop(contact_name, None)
+        self._last_activity.pop(contact_name, None)
+        self._last_heard.pop(contact_name, None)
+        self._peer_offline.pop(contact_name, None)
+        self._presence_success.pop(contact_name, None)
+        self._presence_fail.pop(contact_name, None)
+        self._last_typing_sent.pop(contact_name, None)
+        self._outbox.pop(contact_name, None)
+        self._pending_rotates.pop(contact_name, None)
+        try:
+            self.db.delete_pending_rotate(contact_name)
+        except Exception:
+            pass
         self._refresh_main()
         self._refresh_visible_messages()
         self.notify(f"Rejected {contact_name}.")
@@ -1582,11 +1816,14 @@ class LanMessApp(HandlersMixin, App):
         react_to=0,
         from_outbox=False
     ):
+        self._global_last_activity = time.time()
         async with self._get_contact_lock(contact_name):
             contact = self.db.get_contact(contact_name)
             if not contact:
                 return False
-            if contact.get("blocked"):
+            if contact.get("blocked") or self.db.is_blocked(
+                contact_name
+            ):
                 self.notify(
                     "Contact is blocked.", severity="error"
                 )
@@ -1755,13 +1992,17 @@ class LanMessApp(HandlersMixin, App):
                     severity="error",
                 )
                 return False
-            self.db.add_message(
+            if not self.db.add_message(
                 contact_name,
                 "out",
                 text,
                 reply_to=reply_to,
                 react_to=react_to,
-            )
+            ):
+                self.notify(
+                    "Sent, but local history write failed.",
+                    severity="warning",
+                )
             self._touch_activity(contact_name)
             self._touch_heard(contact_name)
             self._refresh_visible_messages()
@@ -1813,7 +2054,9 @@ class LanMessApp(HandlersMixin, App):
         contact = self.db.get_contact(contact_name)
         if not contact:
             return
-        if contact.get("blocked"):
+        if contact.get("blocked") or self.db.is_blocked(
+            contact_name
+        ):
             self.notify(
                 "Contact is blocked.", severity="error"
             )
@@ -1937,11 +2180,8 @@ class LanMessApp(HandlersMixin, App):
         self._peer_typing.pop(contact_name, None)
         self._presence_success.pop(contact_name, None)
         self._presence_fail.pop(contact_name, None)
-        self._last_typing_sent.pop(
-            contact_name, None
-        )
+        self._last_typing_sent.pop(contact_name, None)
         self._outbox.pop(contact_name, None)
-        self._pending_rotates.pop(contact_name, None)
         self._refresh_main()
         self._refresh_visible_messages()
         self.notify(
@@ -1990,11 +2230,13 @@ class LanMessApp(HandlersMixin, App):
             self._peer_offline.pop(contact_name, None)
             self._presence_success.pop(contact_name, None)
             self._presence_fail.pop(contact_name, None)
-            self._last_typing_sent.pop(
-                contact_name, None
-            )
+            self._last_typing_sent.pop(contact_name, None)
             self._outbox.pop(contact_name, None)
             self._pending_rotates.pop(contact_name, None)
+            try:
+                self.db.delete_pending_rotate(contact_name)
+            except Exception:
+                pass
             screen = self._get_main_screen()
             if (
                 screen is not None
@@ -2031,6 +2273,7 @@ class LanMessApp(HandlersMixin, App):
         self.user_name = None
         self.tcp_port = None
         self._add_attempts = {}
+        self._name_attempts = {}
         self._msg_attempts = {}
         self._contact_locks = {}
         self._peer_typing = {}
@@ -2042,6 +2285,7 @@ class LanMessApp(HandlersMixin, App):
         self._last_typing_sent = {}
         self._outbox = {}
         self._pending_rotates = {}
+        self._auto_lock_in_progress = False
         while len(self.screen_stack) > 1:
             self.pop_screen()
         screen = self.screen

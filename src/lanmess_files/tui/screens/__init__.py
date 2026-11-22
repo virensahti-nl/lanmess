@@ -1,3 +1,4 @@
+
 from .confirm import ConfirmScreen
 from .search import SearchScreen
 from .add_code import AddCodeScreen
@@ -8,6 +9,8 @@ from .menu import MenuScreen
 from .verify import VerifyScreen
 from .help import HelpScreen
 from .startup import StartupScreen
+from .blocked import BlockedScreen
+from .change_pin import ChangePinScreen
 
 __all__ = [
     "ConfirmScreen",
@@ -20,4 +23,6 @@ __all__ = [
     "VerifyScreen",
     "HelpScreen",
     "StartupScreen",
+    "BlockedScreen",
+    "ChangePinScreen",
 ]

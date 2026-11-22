@@ -4,6 +4,8 @@ from textual.containers import Container
 from textual.screen import ModalScreen
 from textual.widgets import Button, Static
 
+from ...config import APP_VERSION
+
 
 class HelpScreen(ModalScreen):
     CSS = """
@@ -36,7 +38,10 @@ class HelpScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Container(id="help-box"):
-            yield Static("Help", id="help-title")
+            yield Static(
+                f"Help - LANMess v{APP_VERSION}",
+                id="help-title",
+            )
             yield Static(
                 "Commands:\n"
                 "  /help          Show this help\n"
@@ -51,8 +56,15 @@ class HelpScreen(ModalScreen):
                 "  /clear         Clear local history\n"
                 "  /clearall      Ask to clear both sides\n"
                 "  /stop          Stop the chat\n"
+                "  /older         Load older messages\n"
                 "  /del <id>      Delete message #id\n"
                 "  /del           Delete most recent\n"
+                "  /block         Block current contact\n"
+                "  /unblock <n>   Unblock a name\n"
+                "  /blocked       Show blocked list\n"
+                "  /changepin     Change unlock PIN\n"
+                "  /rotations     List pending rotations\n"
+                "  /version       Show version\n"
                 "\n"
                 "Keys:\n"
                 "  M          Open menu\n"
@@ -65,8 +77,9 @@ class HelpScreen(ModalScreen):
                 "  A/S/Y/X    Add/Start/Accept/Reject\n"
                 "  C/D/T/V    Clear/Delete/Stop/Verify\n"
                 "  Up/Down    Message history\n"
+                "  PageUp     Load older messages\n"
                 "\n"
-                "Security (v1.1.12):\n"
+                "Security (v1.1.13):\n"
                 "  Per-session X25519 + hash ratchet.\n"
                 "  Ed25519 signatures on every frame\n"
                 "  (including reply and reaction ids).\n"
@@ -76,11 +89,10 @@ class HelpScreen(ModalScreen):
                 "  with Argon2id(PIN).\n"
                 "  HMAC-chained audit log.\n"
                 "  PIN lockout after 5 failures.\n"
-                "  Live presence + typing indicators.\n"
-                "  Manual IP pinning.\n"
+                "  Persistent blocking (survives delete).\n"
+                "  Auto-lock after configurable idle.\n"
                 "  Key Rotation via signed frames.\n"
-                "  Panic Password (Argon2id-hashed)\n"
-                "  for plausible deniability.\n"
+                "  Panic Password (Argon2id-hashed).\n"
                 "  Automatic outbox retry queue.",
                 id="help-content",
             )

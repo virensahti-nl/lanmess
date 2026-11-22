@@ -37,6 +37,9 @@ class _FakeDB:
     def get_contact(self, name):
         return self.contacts.get(name)
 
+    def is_blocked(self, name):
+        return False
+
     def upsert_contact(
         self,
         name,

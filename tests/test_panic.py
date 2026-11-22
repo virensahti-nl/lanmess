@@ -1,7 +1,18 @@
+import base64
 import os
 
 import pytest
-from lanmess_files.config import PANIC_SALT_BYTES
+
+from lanmess_files.config import (
+    PANIC_MARKER,
+    PANIC_MARKER_BYTES,
+    PANIC_PREFIX_V10,
+    PANIC_SALT_BYTES,
+)
+from lanmess_files.crypto import (
+    aes_gcm_encrypt,
+    derive_pin_key,
+)
 from lanmess_files.database import Database
 
 
@@ -39,16 +50,28 @@ def test_panic_pin_stores_salt(db_path):
     assert len(bytes(row["panic_pin_salt"])) == PANIC_SALT_BYTES
 
 
-def test_panic_pin_hash_is_32_bytes(db_path):
+def test_panic_pin_stored_as_ciphertext(db_path):
     db = _setup(db_path)
     db.set_panic_pin("panic123")
     row = db._security_row()
-    assert row["panic_pin_hash"] is not None
-    assert len(row["panic_pin_hash"]) == 64
-    assert all(
-        c in "0123456789abcdef"
-        for c in row["panic_pin_hash"]
-    )
+    stored = row["panic_pin_hash"]
+    assert isinstance(stored, str)
+    assert stored.startswith(PANIC_PREFIX_V10)
+    payload = stored[len(PANIC_PREFIX_V10):]
+    raw = base64.b64decode(payload)
+    assert len(raw) == 12 + PANIC_MARKER_BYTES + 16
+
+
+def test_panic_pin_not_plaintext_argon2id(db_path):
+    db = _setup(db_path)
+    db.set_panic_pin("panic123")
+    row = db._security_row()
+    stored = row["panic_pin_hash"]
+    salt = bytes(row["panic_pin_salt"])
+    argon2_hex = derive_pin_key("panic123", salt).hex()
+    assert stored != argon2_hex
+    assert argon2_hex not in stored
+    assert "panic123" not in stored
 
 
 def test_panic_pin_uses_unique_salt_per_set(db_path):
@@ -107,3 +130,81 @@ def test_panic_pin_survives_reopen(db_path):
     assert db2.set_master(master)
     assert db2.check_panic_pin("panic123")
     assert not db2.check_panic_pin("wrong")
+
+
+def test_panic_pin_legacy_v9_hex_still_works(db_path):
+    db = _setup(db_path)
+    master = db.key
+    salt = os.urandom(PANIC_SALT_BYTES)
+    legacy_hex = derive_pin_key(
+        "legacy-panic", salt
+    ).hex()
+    db._security_update(
+        panic_pin_hash=legacy_hex,
+        panic_pin_salt=salt,
+    )
+    assert db.check_panic_pin("legacy-panic")
+    assert not db.check_panic_pin("wrong")
+    db.close()
+    db2 = Database(db_path)
+    assert db2.set_master(master)
+    assert db2.check_panic_pin("legacy-panic")
+    assert not db2.check_panic_pin("wrong")
+
+
+def test_panic_pin_legacy_upgraded_on_set(db_path):
+    db = _setup(db_path)
+    master = db.key
+    salt = os.urandom(PANIC_SALT_BYTES)
+    legacy_hex = derive_pin_key(
+        "legacy-panic", salt
+    ).hex()
+    db._security_update(
+        panic_pin_hash=legacy_hex,
+        panic_pin_salt=salt,
+    )
+    assert db.check_panic_pin("legacy-panic")
+    db.set_panic_pin("legacy-panic")
+    row = db._security_row()
+    assert row["panic_pin_hash"].startswith(PANIC_PREFIX_V10)
+    assert db.check_panic_pin("legacy-panic")
+    assert not db.check_panic_pin("wrong")
+
+
+def test_panic_pin_corrupted_blob_rejected(db_path):
+    db = _setup(db_path)
+    db.set_panic_pin("panic123")
+    row = db._security_row()
+    stored = row["panic_pin_hash"]
+    corrupted = (
+        stored[:len(PANIC_PREFIX_V10) + 4]
+        + "AAAA"
+        + stored[len(PANIC_PREFIX_V10) + 8:]
+    )
+    db._security_update(panic_pin_hash=corrupted)
+    assert not db.check_panic_pin("panic123")
+
+
+def test_panic_pin_missing_salt_returns_false(db_path):
+    db = _setup(db_path)
+    db.set_panic_pin("panic123")
+    db._security_update(panic_pin_salt=None)
+    assert not db.check_panic_pin("panic123")
+
+
+def test_panic_pin_marker_content_verified(db_path):
+    db = _setup(db_path)
+    db.set_panic_pin("panic123")
+    row = db._security_row()
+    stored = row["panic_pin_hash"]
+    salt = bytes(row["panic_pin_salt"])
+    from lanmess_files.config import PANIC_AAD
+    from lanmess_files.crypto import aes_gcm_decrypt
+    payload = stored[len(PANIC_PREFIX_V10):]
+    blob = base64.b64decode(payload)
+    nonce = blob[:12]
+    ct = blob[12:]
+    key = derive_pin_key("panic123", salt)
+    marker = aes_gcm_decrypt(key, nonce, ct, PANIC_AAD)
+    assert marker == PANIC_MARKER
+    assert len(marker) == PANIC_MARKER_BYTES

@@ -1,6 +1,7 @@
 import re
 import socket
 import time
+from collections import Counter
 
 from ..config import PIN_MAX_LEN, PIN_MIN_LEN
 
@@ -13,27 +14,36 @@ def _check_pin_strength(pin):
     if not pin:
         return "PIN required."
     if len(pin) < PIN_MIN_LEN:
-        return (
-            f"PIN must be at least {PIN_MIN_LEN} characters."
-        )
+        return f"PIN must be at least {PIN_MIN_LEN} characters."
     if len(pin) > PIN_MAX_LEN:
         return f"PIN too long (max {PIN_MAX_LEN})."
-    classes = 0
-    if re.search(r"[a-z]", pin):
-        classes += 1
-    if re.search(r"[A-Z]", pin):
-        classes += 1
-    if re.search(r"[0-9]", pin):
-        classes += 1
-    if re.search(r"[^a-zA-Z0-9]", pin):
-        classes += 1
-    if classes < 3:
-        return (
-            "PIN must contain at least 3 of: "
-            "lowercase, uppercase, digit, symbol."
+    if not re.search(r"[a-z]", pin):
+        return "PIN must contain a lowercase letter."
+    if not re.search(r"[A-Z]", pin):
+        return "PIN must contain an uppercase letter."
+    if not re.search(r"[0-9]", pin):
+        return "PIN must contain a digit."
+    if not re.search(r"[^a-zA-Z0-9]", pin):
+        return "PIN must contain a symbol."
+    if len(set(pin)) < 8:
+        return "PIN must contain at least 8 distinct characters."
+    for i in range(len(pin) - 3):
+        if pin[i] == pin[i + 1] == pin[i + 2] == pin[i + 3]:
+            return "PIN has four identical characters in a row."
+    for sub_len in range(3, len(pin) // 3 + 1):
+        counts = Counter(
+            pin[i:i + sub_len]
+            for i in range(len(pin) - sub_len + 1)
         )
-    if len(set(pin)) < 6:
-        return "PIN uses too few distinct characters."
+        if any(c >= 3 for c in counts.values()):
+            return "PIN contains a repeated pattern."
+    for sub_len in range(4, len(pin) // 2 + 1):
+        counts = Counter(
+            pin[i:i + sub_len]
+            for i in range(len(pin) - sub_len + 1)
+        )
+        if any(c >= 2 for c in counts.values()):
+            return "PIN contains a repeated pattern."
     return None
 
 

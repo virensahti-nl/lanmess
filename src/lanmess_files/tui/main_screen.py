@@ -17,7 +17,11 @@ from textual.widgets import (
 )
 
 from ..config import (
+    APP_VERSION,
+    AUTO_LOCK_LABELS,
+    AUTO_LOCK_VALUES,
     HISTORY_MAX,
+    MESSAGES_PAGE_SIZE,
     ONLINE_WINDOW,
     TYPING_DISPLAY_TTL,
 )
@@ -26,6 +30,8 @@ from .helpers import get_local_ips
 from .screens import (
     AddByIpScreen,
     AddCodeScreen,
+    BlockedScreen,
+    ChangePinScreen,
     ConfirmScreen,
     HelpScreen,
     MenuScreen,
@@ -88,15 +94,14 @@ class MainScreen(Screen):
         Binding("y", "accept", "Accept", show=False),
         Binding("x", "reject", "Reject", show=False),
         Binding("c", "clear_chat", "Clear", show=False),
-        Binding(
-            "d", "delete_contact", "Delete", show=False
-        ),
+        Binding("d", "delete_contact", "Delete", show=False),
         Binding("t", "stop_chat", "Stop", show=False),
         Binding("v", "verify", "Verify", show=False),
         Binding("ctrl+r", "reset_all", "Reset", show=False),
         Binding("f5", "refresh", "Refresh", show=False),
         Binding("up", "history_prev", "Prev", show=False),
         Binding("down", "history_next", "Next", show=False),
+        Binding("pageup", "load_older", "Older", show=False),
     ]
 
     def __init__(self):
@@ -107,6 +112,9 @@ class MainScreen(Screen):
         self._contacts_items = {}
         self._last_contacts_sig = None
         self._status_tokens = {}
+        self._loaded_messages = []
+        self._oldest_loaded_id = None
+        self._has_more_older = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -305,24 +313,18 @@ class MainScreen(Screen):
                         pass
                     break
 
-    def load_messages_for(self, contact_name):
-        self.current_contact = contact_name
+    def _render_messages(self):
         try:
             log = self.query_one("#messages", RichLog)
         except Exception:
             return
         log.clear()
-        if not contact_name:
-            self.set_chat_title("Select a contact")
+        if not self.current_contact:
             log.write("Select a contact on the left.")
             return
-        contact = self.app.db.get_contact(contact_name)
+        contact = self.app.db.get_contact(self.current_contact)
         if not contact:
-            self.set_chat_title("Select a contact")
             return
-        self._refresh_chat_title()
-        self.app.db.clear_unread(contact_name)
-        self.refresh_contacts()
         if contact.get("blocked"):
             log.write("[BLOCKED CONTACT - messages hidden]")
             return
@@ -341,14 +343,19 @@ class MainScreen(Screen):
                 "[No active session - press S or wait "
                 "for chat request]"
             )
-        for m in self.app.db.get_messages(contact_name):
+        if self._has_more_older and self._loaded_messages:
+            log.write(
+                "[older messages available - "
+                "press PageUp or /older]"
+            )
+        for m in self._loaded_messages:
             ts = time.strftime(
                 "%H:%M", time.localtime(m["timestamp"])
             )
             who = (
                 "You"
                 if m["direction"] == "out"
-                else contact_name
+                else self.current_contact
             )
             rt = m.get("reply_to", 0)
             ct = m.get("react_to", 0)
@@ -362,6 +369,52 @@ class MainScreen(Screen):
                 f"{prefix}{m['content']}"
             )
 
+    def load_messages_for(self, contact_name):
+        self.current_contact = contact_name
+        self._loaded_messages = []
+        self._oldest_loaded_id = None
+        self._has_more_older = False
+        if not contact_name:
+            self.set_chat_title("Select a contact")
+            self._render_messages()
+            return
+        contact = self.app.db.get_contact(contact_name)
+        if not contact:
+            self.set_chat_title("Select a contact")
+            self._render_messages()
+            return
+        self._refresh_chat_title()
+        self.app.db.clear_unread(contact_name)
+        self.refresh_contacts()
+        loaded = self.app.db.get_messages(
+            contact_name, limit=MESSAGES_PAGE_SIZE
+        )
+        self._loaded_messages = loaded
+        if loaded:
+            self._oldest_loaded_id = loaded[0]["id"]
+        self._has_more_older = (
+            len(loaded) >= MESSAGES_PAGE_SIZE
+        )
+        self._render_messages()
+
+    async def load_older_messages(self):
+        if not self.current_contact or not self._has_more_older:
+            return
+        older = self.app.db.get_messages(
+            self.current_contact,
+            limit=MESSAGES_PAGE_SIZE,
+            before_id=self._oldest_loaded_id,
+        )
+        if not older:
+            self._has_more_older = False
+            self.app.notify("No more older messages.")
+            self._render_messages()
+            return
+        self._loaded_messages = older + self._loaded_messages
+        self._oldest_loaded_id = older[0]["id"]
+        self._has_more_older = len(older) >= MESSAGES_PAGE_SIZE
+        self._render_messages()
+
     def on_list_view_selected(self, event):
         try:
             if isinstance(event.item, ContactItem):
@@ -373,6 +426,10 @@ class MainScreen(Screen):
 
     async def on_input_changed(self, event):
         if event.input.id == "message-input":
+            try:
+                self.app._global_last_activity = time.time()
+            except Exception:
+                pass
             if (
                 self.current_contact
                 and event.value.strip()
@@ -384,6 +441,10 @@ class MainScreen(Screen):
                 )
 
     async def on_input_submitted(self, event):
+        try:
+            self.app._global_last_activity = time.time()
+        except Exception:
+            pass
         if event.input.id == "add-code":
             code = event.value.strip()
             event.input.value = ""
@@ -430,6 +491,39 @@ class MainScreen(Screen):
                 self._send_bg(contact_name, text)
             )
 
+    async def _send_bg(
+        self, contact_name, text, reply_to=0, react_to=0
+    ):
+        self.set_status("Sending...", token="send")
+        ok = False
+        try:
+            ok = await self.app.send_chat_message(
+                contact_name,
+                text,
+                reply_to=reply_to,
+                react_to=react_to,
+            )
+        except Exception as e:
+            self.app.notify(
+                f"Send failed: {e}", severity="error"
+            )
+            ok = False
+        finally:
+            self.set_status("", token="send")
+        if not ok and not reply_to and not react_to:
+            try:
+                inp = self.query_one(
+                    "#message-input", Input
+                )
+                if not inp.value:
+                    inp.value = text
+                    try:
+                        inp.cursor_position = len(text)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
     def _navigate_history(self, direction):
         if not self._history:
             return
@@ -471,6 +565,9 @@ class MainScreen(Screen):
         if inp.has_focus:
             self._navigate_history(1)
 
+    def action_load_older(self):
+        asyncio.create_task(self.load_older_messages())
+
     async def handle_command(self, cmd):
         parts = cmd.split(None, 1)
         name = parts[0].lower()
@@ -489,6 +586,50 @@ class MainScreen(Screen):
             return
         if name == "/code":
             self.action_show_code()
+            return
+        if name == "/version":
+            self.app.notify(f"LANMess v{APP_VERSION}")
+            return
+        if name == "/rotations":
+            pending = list(
+                self.app._pending_rotates.keys()
+            )
+            if pending:
+                self.app.notify(
+                    "Pending rotations: "
+                    + ", ".join(pending)
+                )
+            else:
+                self.app.notify("No pending rotations.")
+            return
+        if name == "/blocked":
+            self.action_show_blocked()
+            return
+        if name == "/block":
+            if not self.current_contact:
+                self.app.notify(
+                    "Select a contact first.",
+                    severity="error",
+                )
+                return
+            await self.app.block_contact(
+                self.current_contact
+            )
+            return
+        if name == "/unblock":
+            target = arg.strip()
+            if not target and self.current_contact:
+                target = self.current_contact
+            if not target:
+                self.app.notify(
+                    "Usage: /unblock <name>",
+                    severity="error",
+                )
+                return
+            await self.app.unblock_contact(target)
+            return
+        if name == "/changepin":
+            self.action_change_pin()
             return
         if not self.current_contact:
             self.app.notify(
@@ -514,6 +655,8 @@ class MainScreen(Screen):
             self.action_clear_all()
         elif name == "/stop":
             self.action_stop_chat()
+        elif name == "/older":
+            await self.load_older_messages()
         elif name == "/del":
             if arg:
                 try:
@@ -621,39 +764,6 @@ class MainScreen(Screen):
             )
         )
 
-    async def _send_bg(
-        self, contact_name, text, reply_to=0, react_to=0
-    ):
-        self.set_status("Sending...", token="send")
-        ok = False
-        try:
-            ok = await self.app.send_chat_message(
-                contact_name,
-                text,
-                reply_to=reply_to,
-                react_to=react_to,
-            )
-        except Exception as e:
-            self.app.notify(
-                f"Send failed: {e}", severity="error"
-            )
-            ok = False
-        finally:
-            self.set_status("", token="send")
-        if not ok and not reply_to and not react_to:
-            try:
-                inp = self.query_one(
-                    "#message-input", Input
-                )
-                if not inp.value:
-                    inp.value = text
-                    try:
-                        inp.cursor_position = len(text)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
     def action_focus_add(self):
         self.query_one("#add-code", Input).focus()
 
@@ -689,10 +799,51 @@ class MainScreen(Screen):
             MyAddressScreen(ips, self.app.tcp_port)
         )
 
+    def action_show_blocked(self):
+        self.app.push_screen(BlockedScreen())
+
     def action_search(self):
         self.app.push_screen(SearchScreen())
 
+    def action_change_pin(self):
+        self.app.push_screen(
+            ChangePinScreen(),
+            callback=self._on_change_pin,
+        )
+
+    def _on_change_pin(self, result):
+        if not result:
+            return
+        old, new = result
+        asyncio.create_task(
+            self._do_change_pin(old, new)
+        )
+
+    async def _do_change_pin(self, old, new):
+        ok = await self.app.change_pin(old, new)
+        if ok:
+            self.app.notify("PIN changed.")
+        else:
+            self.app.notify(
+                "PIN change failed (wrong current PIN?).",
+                severity="error",
+            )
+
+    def _cycle_auto_lock(self):
+        values = list(AUTO_LOCK_VALUES)
+        current = self.app.db.get_auto_lock_seconds()
+        idx = values.index(current) if current in values else 2
+        new = values[(idx + 1) % len(values)]
+        self.app.db.set_auto_lock_seconds(new)
+        self.app.notify(
+            f"Auto-lock: {AUTO_LOCK_LABELS.get(new, 'Off')}"
+        )
+
     def action_open_menu(self):
+        try:
+            blocked_count = len(self.app.db.get_blocked())
+        except Exception:
+            blocked_count = 0
         self.app.push_screen(
             MenuScreen(
                 verified_only=self.app.db.get_verified_only(),
@@ -702,6 +853,10 @@ class MainScreen(Screen):
                 presence_enabled=(
                     self.app.db.get_presence_enabled()
                 ),
+                auto_lock_seconds=(
+                    self.app.db.get_auto_lock_seconds()
+                ),
+                blocked_count=blocked_count,
             ),
             callback=self._on_menu_result,
         )
@@ -717,6 +872,14 @@ class MainScreen(Screen):
             self._do_set_panic()
         elif action == "rotate":
             self._do_rotate_keys()
+        elif action == "block":
+            asyncio.create_task(self._block_current())
+        elif action == "unblock":
+            asyncio.create_task(self._unblock_current())
+        elif action == "retryrot":
+            asyncio.create_task(
+                self.app.retry_pending_rotations()
+            )
         else:
             self._dispatch_sync(action)
 
@@ -744,6 +907,22 @@ class MainScreen(Screen):
             ) if ok else None,
         )
 
+    async def _block_current(self):
+        if not self.current_contact:
+            self.app.notify(
+                "Select a contact first.", severity="error"
+            )
+            return
+        await self.app.block_contact(self.current_contact)
+
+    async def _unblock_current(self):
+        if not self.current_contact:
+            self.app.notify(
+                "Select a contact first.", severity="error"
+            )
+            return
+        await self.app.unblock_contact(self.current_contact)
+
     def _dispatch_sync(self, action):
         try:
             if action == "stop":
@@ -768,6 +947,10 @@ class MainScreen(Screen):
                 self.action_add_by_ip()
             elif action == "address":
                 self.action_show_address()
+            elif action == "blocked":
+                self.action_show_blocked()
+            elif action == "changepin":
+                self.action_change_pin()
             elif action == "vonl":
                 new = not self.app.db.get_verified_only()
                 self.app.db.set_verified_only(new)

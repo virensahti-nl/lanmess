@@ -61,6 +61,7 @@ class _HandlerApp:
         self._peer_typing = {}
         self._last_activity = {}
         self._add_attempts = {}
+        self._name_attempts = {}
         self._msg_attempts = {}
         self._pending_rotates = {}
         self._presence_success = {}
@@ -69,7 +70,7 @@ class _HandlerApp:
         self._outbox = {}
         self._contact_locks = {}
         self.notifications = []
-
+        
     def notify(self, msg, **kw):
         self.notifications.append(msg)
 

@@ -29,9 +29,14 @@ No accounts. No phone numbers. No central server. No telemetry. No cloud.
 - **Encrypted local storage.** The entire database is encrypted under a random per-device master key, recoverable only via Argon2id(PIN).
 - **Serverless discovery.** UDP broadcast beacons with rotating TOTP-derived code tags. No registry, no directory.
 - **Add by code or by IP.** Works on a LAN with broadcast discovery, or across routed overlays like Tailscale, WireGuard, and ZeroTier.
+- **Persistent blocking.** Blocked peers are stored separately and survive contact deletion; the blocked list is manageable from the menu.
 - **Tamper-evident audit log.** HMAC-chained security events inside the encrypted database.
 - **PIN lockout and panic password.** Exponential lockout on failed attempts; a secondary password wipes the database on demand.
-- **Key rotation.** Rotate Ed25519 and X25519 keys without re-adding contacts.
+- **Encrypted panic password.** The panic password is stored as authenticated ciphertext under Argon2id, not as a reversible hash.
+- **Auto-lock.** Configurable idle timeout locks the app when the terminal has been quiet for too long.
+- **PIN change without migration.** Re-wrap the master key under a new PIN from the menu, no data loss.
+- **Key rotation.** Rotate Ed25519 and X25519 keys without re-adding contacts; pending rotations persist across restarts.
+- **Message pagination.** Long conversations load in pages of 500; PageUp or `/older` fetches the next page.
 - **Terminal UI.** Contact list, chat log, unread badges, message history, slash commands, global search.
 - **Cross-platform notifications.** Linux, macOS, Windows, and Termux.
 
@@ -41,13 +46,13 @@ LANMess requires Python 3.9 or later.
 
 Install from PyPI:
 
-```bash
+```
 pip install lanmess
 ```
 
 Or from source:
 
-```bash
+```
 git clone https://github.com/virensahti-nl/lanmess.git
 cd lanmess
 python -m pip install -e ".[test]"
@@ -55,7 +60,7 @@ python -m pip install -e ".[test]"
 
 Verify the install:
 
-```bash
+```
 lanmess --version
 ```
 
@@ -63,7 +68,7 @@ lanmess --version
 
 Launch the app:
 
-```bash
+```
 lanmess
 ```
 
@@ -71,7 +76,7 @@ On first launch you will be asked for:
 
 1. **Display name.** Shown to peers. 1 to 40 characters, no control characters.
 2. **Group code.** A shared secret of at least 12 characters. All peers that should discover and add each other must use the same group code. It is used once to derive shared keys and never stored in plaintext.
-3. **PIN.** A strong PIN of at least 12 characters, containing at least three of: lowercase, uppercase, digit, symbol. Used to unlock the local database.
+3. **PIN.** A strong PIN of at least 12 characters, containing all four of: lowercase, uppercase, digit, symbol. It must contain at least 8 distinct characters, must not repeat any four characters in a row, and must not contain a pattern that repeats three or more times. Used to unlock the local database.
 
 The group code is only entered once. From then on, you unlock the app with your PIN.
 
@@ -114,6 +119,7 @@ Press `?` inside the app for the full list of shortcuts and slash commands.
 | `T` | Stop the current chat session |
 | `V` | Verify contact safety numbers |
 | `Up` / `Down` | Navigate message history |
+| `PageUp` | Load older messages |
 
 ### Slash commands
 
@@ -131,16 +137,25 @@ Press `?` inside the app for the full list of shortcuts and slash commands.
 | `/clear` | Clear local history with the current contact |
 | `/clearall` | Ask the peer to clear the history on both sides |
 | `/stop` | Stop the chat session |
+| `/older` | Load older messages |
 | `/del <id>` | Delete a specific message |
 | `/del` | Delete the most recent message |
+| `/block` | Block the currently selected contact |
+| `/unblock <name>` | Unblock a name |
+| `/blocked` | Open the blocked contacts screen |
+| `/changepin` | Change the unlock PIN |
+| `/rotations` | Show pending key rotations |
+| `/version` | Print the current version |
 
 ## Security
 
 The cryptographic primitives are Ed25519, X25519, AES-256-GCM, HKDF-SHA256, HMAC-SHA256, PBKDF2-HMAC-SHA256, and Argon2id. Message bodies are padded to 256-byte blocks to hide plaintext length. Database rows are bound to their context via AAD so ciphertexts cannot be swapped between rows.
 
-LANMess defends against passive network observers, active network attackers without keys, replay, database theft, PIN brute-force, and offline brute-force of the panic password. It does **not** defend against a rooted device while unlocked, traffic analysis, a compromised peer, or a first-contact man-in-the-middle without out-of-band safety-number verification. It has not been independently audited.
+The panic password is stored as `v10:` followed by Base64 of `nonce || AES-256-GCM(Argon2id(pin, salt), 32-byte marker)`. There is no reversible path back to the PIN, and the raw Argon2id output is never written to disk. Verification requires running the full Argon2id KDF and passing the 128-bit GCM authentication tag, followed by a constant-time comparison against the fixed marker.
 
-The full threat model is in [`THREAT_MODEL.md`](THREAT_MODEL.md). Reporting information and known limitations are in [`SECURITY.md`](SECURITY.md).
+LANMess defends against passive network observers, active network attackers without keys, replay, database theft, PIN brute-force, offline brute-force of the panic password, and unwanted peers through persistent blocking. It does **not** defend against a rooted device while unlocked, traffic analysis, a compromised peer, or a first-contact man-in-the-middle without out-of-band safety-number verification. It has not been independently audited.
+
+The full threat model, including assumptions, adversary capabilities, and residual risk, is in [`THREAT_MODEL.md`](THREAT_MODEL.md). Reporting information and known limitations are in [`SECURITY.md`](SECURITY.md).
 
 ## Configuration and Storage
 
@@ -161,56 +176,44 @@ The TCP port is chosen on first launch from the range and stored in the encrypte
 
 To back up LANMess, copy `~/.lanmess/lanmess.db` (and the `-wal` and `-shm` files while the app is running) to a secure location. The backup is useless without the PIN.
 
-## Development
+## Changelog
 
-Clone the repository and install in editable mode:
+### v1.1.13
 
-```bash
-git clone https://github.com/virensahti-nl/lanmess.git
-cd lanmess
-python -m venv .venv
-source .venv/bin/activate    # On Windows: .venv\Scripts\activate
-python -m pip install -e ".[test]"
-```
+- Stronger PIN policy. A PIN must now contain all four character classes (lowercase, uppercase, digit, symbol), at least 8 distinct characters, no four identical characters in a row, and no pattern that repeats three or more times. Applies at identity creation, migration, and `/changepin`. Unlocking an existing identity is unaffected.
+- Encrypted panic password. The panic password is now stored as `v10:` + Base64 of `nonce || AES-256-GCM(Argon2id(pin, salt), 32-byte marker)` instead of a plain Argon2id hex hash.
+- Persistent blocking. Blocked peers are stored in a dedicated table and survive contact deletion. `/block`, `/unblock`, and `/blocked` commands, plus menu entries and a `BlockedScreen` modal.
+- Legacy auto-block cleanup on upgrade.
+- PIN change without migration. "Change PIN" menu action and `/changepin`.
+- Auto-lock. Configurable idle timeout.
+- Message pagination. `get_messages` accepts `before_id`; PageUp and `/older` fetch older history.
+- Manual pending-rotation flush. "Retry pending rotations" and `/rotations`.
+- Per-name rate limit on add requests, parallel to the per-IP limit.
+- `/version` command and updated Help screen.
+- Blocked check added to `_verify_peer_sig_no_touch`, cascading to every handler.
+- `_handle_add_request`, `_handle_add_accept`, `_handle_rotate` reject blocked peers.
+- `_process_add_response` refuses to re-add a blocked contact.
+- `_outbox_loop` drops queued messages for blocked or unverified contacts.
+- `commit_incoming_message` writes message and chain advance in a single transaction.
+- `_handle_chat_stop` clears the outbox.
+- `_handle_chat_reject` clears the local ephemeral secret.
+- `_handle_add_reject` clears every per-contact dict and pending rotation.
+- `_handle_message` refuses to advance the receive chain if the local database write fails.
+- Schema v10. Automatic migration from v9 preserves the panic hash; from v5 through v8 the panic hash is cleared and the user is prompted to set a new one.
 
-Run the app locally:
+### v1.1.12
 
-```bash
-python -m lanmess_files.main
-```
-
-### Project layout
-
-```
-lanmess/
-├── pyproject.toml
-├── README.md
-├── THREAT_MODEL.md
-├── SECURITY.md
-├── LICENSE
-├── src/
-│   └── lanmess_files/
-│       ├── __init__.py
-│       ├── config.py
-│       ├── crypto.py
-│       ├── database.py
-│       ├── discovery.py
-│       ├── network.py
-│       ├── notifications.py
-│       ├── tui.py
-│       └── main.py
-└── tests/
-    ├── conftest.py
-    └── test_*.py
-```
-
-### Testing
-
-```bash
-pytest
-```
-
-The suite covers the cryptographic primitives, KDFs, ratchets, padding, database migrations, audit log chaining, lockout and panic flows, discovery, network framing, protocol handlers, notifications, and outbox behavior.
+- Reply and reaction metadata are signed.
+- Panic PIN is stored as an Argon2id hash under a per-database salt.
+- `derive_pin_key` raises if Argon2 is unavailable.
+- Message AAD binds to the row id.
+- Outbox writes exactly once, on delivery.
+- Signature and decryption failures no longer block the peer.
+- Key rotation is refused while a previous rotation is pending.
+- Discovery broadcasts both current and previous code tags.
+- `update_contact_keys` no longer persists `_id`.
+- Schema v9 with message AAD re-encryption.
+- `tui.py` split into a `tui/` package.
 
 ## Contributing
 

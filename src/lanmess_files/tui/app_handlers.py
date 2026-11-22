@@ -78,6 +78,23 @@ class HandlersMixin:
     async def _handle_add_request(self, msg):
         peer_ip = msg.get("_peer_ip")
         now = time.time()
+        ts = msg.get("timestamp")
+        from_name = msg.get("from_name")
+        from_ed = msg.get("from_ed_pub")
+        from_x = msg.get("from_x25519_pub")
+        from_port = msg.get("from_port")
+        challenge_b64 = msg.get("challenge")
+        proof_hex = msg.get("proof")
+        if not self._valid_name(from_name):
+            return {
+                "type": "ADD_REJECT",
+                "reason": "missing_name",
+            }
+        if self.db.is_blocked(from_name):
+            return {
+                "type": "ADD_REJECT",
+                "reason": "blocked",
+            }
         if peer_ip:
             last = self._add_attempts.get(peer_ip, 0)
             if now - last < ADD_RATE_LIMIT_SECONDS:
@@ -89,22 +106,22 @@ class HandlersMixin:
             self._prune_dict(
                 self._add_attempts, ADD_RATE_LIMIT_MAX
             )
-        ts = msg.get("timestamp")
+        name_attempts = getattr(self, "_name_attempts", None)
+        if name_attempts is not None:
+            last = name_attempts.get(from_name, 0)
+            if now - last < ADD_RATE_LIMIT_SECONDS:
+                return {
+                    "type": "ADD_REJECT",
+                    "reason": "rate_limited",
+                }
+            name_attempts[from_name] = now
+            self._prune_dict(
+                name_attempts, ADD_RATE_LIMIT_MAX
+            )
         if not self._valid_timestamp(ts):
             return {
                 "type": "ADD_REJECT",
                 "reason": "stale",
-            }
-        from_name = msg.get("from_name")
-        from_ed = msg.get("from_ed_pub")
-        from_x = msg.get("from_x25519_pub")
-        from_port = msg.get("from_port")
-        challenge_b64 = msg.get("challenge")
-        proof_hex = msg.get("proof")
-        if not self._valid_name(from_name):
-            return {
-                "type": "ADD_REJECT",
-                "reason": "missing_name",
             }
         if from_name == self.user_name:
             return {
@@ -281,8 +298,12 @@ class HandlersMixin:
         from_name = msg.get("from_name")
         if not self._valid_name(from_name):
             return {"type": "OK"}
+        if self.db.is_blocked(from_name):
+            return {"type": "OK"}
         contact = self.db.get_contact(from_name)
         if not contact:
+            return {"type": "OK"}
+        if contact.get("blocked"):
             return {"type": "OK"}
         from_ed = msg.get("from_ed_pub")
         from_x = msg.get("from_x25519_pub")
@@ -347,6 +368,20 @@ class HandlersMixin:
         self._apply_peer_ip(msg, from_name)
         if contact.get("pending") == 1:
             self.db.delete_contact(from_name)
+            self._contact_locks.pop(from_name, None)
+            self._peer_typing.pop(from_name, None)
+            self._last_activity.pop(from_name, None)
+            self._last_heard.pop(from_name, None)
+            self._peer_offline.pop(from_name, None)
+            self._presence_success.pop(from_name, None)
+            self._presence_fail.pop(from_name, None)
+            self._last_typing_sent.pop(from_name, None)
+            self._outbox.pop(from_name, None)
+            self._pending_rotates.pop(from_name, None)
+            try:
+                self.db.delete_pending_rotate(from_name)
+            except Exception:
+                pass
             self._refresh_main()
             self._refresh_visible_messages()
             self.notify(
@@ -361,8 +396,12 @@ class HandlersMixin:
         from_name = msg.get("from_name")
         if not self._valid_name(from_name):
             return {"type": "OK"}
+        if self.db.is_blocked(from_name):
+            return {"type": "OK"}
         contact = self.db.get_contact(from_name)
         if not contact:
+            return {"type": "OK"}
+        if contact.get("blocked"):
             return {"type": "OK"}
         try:
             old_pk = ed_public_from_bytes(
@@ -400,8 +439,12 @@ class HandlersMixin:
         from_name = msg.get("from_name")
         if not self._valid_name(from_name):
             return None
+        if self.db.is_blocked(from_name):
+            return None
         contact = self.db.get_contact(from_name)
         if not contact:
+            return None
+        if contact.get("blocked"):
             return None
         try:
             pk = ed_public_from_bytes(
@@ -548,6 +591,14 @@ class HandlersMixin:
     async def _handle_chat_reject(self, msg):
         contact = await self._verify_peer_sig(msg)
         if contact:
+            try:
+                self.db.set_contact_state(
+                    contact["name"],
+                    session_local_eph_sk_hex="",
+                    session_peer_eph_pub_hex="",
+                )
+            except Exception:
+                pass
             self.notify(
                 f"{contact['name']} rejected your chat "
                 "request."
@@ -578,6 +629,7 @@ class HandlersMixin:
         self._presence_success.pop(name, None)
         self._presence_fail.pop(name, None)
         self._last_typing_sent.pop(name, None)
+        self._outbox.pop(name, None)
         self._refresh_main()
         self._refresh_visible_messages()
         self.notify(
@@ -682,7 +734,11 @@ class HandlersMixin:
                         timeout=PROBE_TIMEOUT
                     )
                     if resp:
-                        del self._pending_rotates[name]
+                        self._pending_rotates.pop(name, None)
+                        try:
+                            self.db.delete_pending_rotate(name)
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
@@ -711,6 +767,8 @@ class HandlersMixin:
         from_name = msg.get("from_name")
         if not self._valid_name(from_name):
             return {"type": "ERROR", "reason": "bad_name"}
+        if self.db.is_blocked(from_name):
+            return {"type": "ERROR", "reason": "blocked"}
         contact = self.db.get_contact(from_name)
         if not contact:
             return {"type": "ERROR", "reason": "unknown_contact"}
@@ -819,18 +877,15 @@ class HandlersMixin:
         if len(text) > MAX_MESSAGE_LEN:
             text = text[:MAX_MESSAGE_LEN]
         new_chain = chain_advance(recv_chain)
-        self.db.add_message(
+        if not self.db.commit_incoming_message(
             from_name,
-            "in",
             text,
-            reply_to=reply_to,
-            react_to=react_to,
-        )
-        self.db.set_contact_state(
-            from_name,
-            recv_chain_key_hex=new_chain.hex(),
-            recv_counter=counter,
-        )
+            reply_to,
+            react_to,
+            new_chain.hex(),
+            counter,
+        ):
+            return {"type": "ERROR", "reason": "storage_failed"}
         if peer_ip and peer_ip != contact.get("ip"):
             if not contact.get("pinned"):
                 self.db.set_contact_state(
