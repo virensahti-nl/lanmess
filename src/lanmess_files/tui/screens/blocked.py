@@ -44,36 +44,26 @@ class BlockedScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Container(id="blocked-box"):
-            yield Static(
-                "Blocked Contacts", id="blocked-title"
-            )
+            yield Static("Blocked Contacts", id="blocked-title")
             yield VerticalScroll(id="blocked-list")
             yield Button(
-                "Close", id="blocked-close",
-                variant="primary",
+                "Close", id="blocked-close", variant="primary"
             )
 
-    def on_mount(self):
-        self._refresh()
+    async def on_mount(self):
+        await self._refresh()
 
-    def _refresh(self):
-        try:
-            scroll = self.query_one(
-                "#blocked-list", VerticalScroll
-            )
-        except Exception:
-            return
-        for child in list(scroll.children):
-            try:
-                child.remove()
-            except Exception:
-                pass
+    async def _refresh(self):
+        scroll = self.query_one(
+            "#blocked-list", VerticalScroll
+        )
+        await scroll.remove_children()
         try:
             blocked = self.app.db.get_blocked()
         except Exception:
             blocked = []
         if not blocked:
-            scroll.mount(
+            await scroll.mount(
                 Static(
                     "No blocked contacts.\n"
                     "Use /block to block the selected "
@@ -87,26 +77,26 @@ class BlockedScreen(ModalScreen):
             preview = ed[:16] + "..." if ed else "?"
             btn = Button(
                 f"Unblock {name}   [{preview}]",
-                id=f"unblockbtn-{name}",
                 variant="warning",
             )
-            btn.blocked_name = name
-            scroll.mount(btn)
+            btn._blocked_name = name
+            await scroll.mount(btn)
 
-    def on_button_pressed(self, event):
-        bid = event.button.id or ""
-        if bid == "blocked-close":
+    async def on_button_pressed(self, event):
+        if event.button.id == "blocked-close":
             self.dismiss()
             return
-        name = getattr(event.button, "blocked_name", None)
+        name = getattr(
+            event.button, "_blocked_name", None
+        )
         if name:
-            asyncio.create_task(self._do_unblock(name))
+            await self._do_unblock(name)
 
     async def _do_unblock(self, name):
         try:
             await self.app.unblock_contact(name)
         finally:
-            self._refresh()
+            await self._refresh()
 
     def action_close(self):
         self.dismiss()

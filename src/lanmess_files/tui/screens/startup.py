@@ -115,7 +115,7 @@ class StartupScreen(Screen):
                 )
             elif self.state == "needs_vault":
                 yield Static(
-                    "Migrating to v1.1.13. Enter your old "
+                    "Migrating to v1.1.14. Enter your old "
                     "group code once, then choose a PIN.",
                     id="startup-note",
                 )

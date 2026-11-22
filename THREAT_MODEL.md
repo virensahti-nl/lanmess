@@ -100,7 +100,7 @@ A known peer that the user no longer wants to hear from. Sends messages, presenc
 - **Row binding.** Every encrypted row is bound to its context through AAD: `contact:<name_hash>` for contacts, `message:<contact_id>:<row_id>` for messages, `audit:<prev_hmac>` for audit entries, `blocked:<name_hash>` for blocked entries, `pending_rotate:<name_hash>` for queued rotations. Ciphertexts cannot be swapped between rows.
 - **No plaintext metadata.** The meta table contains only schema version numbers and one-time migration flags. Contact names are hashed with the lookup key. Messages carry no plaintext sender, recipient, or timestamp fields outside the encrypted blob.
 - **Panic password does not leak the PIN or its hash.** The panic password is stored as `v10:` + Base64 of `nonce || AES-256-GCM(Argon2id(pin, salt), 32-byte marker)`, authenticated under AAD `b"lanmess-panic-v1"`. No raw Argon2id output is written to disk. An attacker with the database cannot verify a candidate panic PIN without running Argon2id and passing the GCM authentication tag, then matching the constant marker via `compare_digest`. This is the same cost as brute-forcing the vault PIN.
-- **Legacy panic format is compatible but weaker.** Pre-v1.1.13 panic PINs are stored as a plain Argon2id hex hash. Verification still runs Argon2id, so offline guessing is expensive, but the stored value is a hash rather than a ciphertext and could be reused as a rainbow-table input if the salt were reused (it is not, since each set generates a fresh 16-byte salt). Re-setting the panic password upgrades the storage format to v10 automatically.
+- **Legacy panic format is compatible but weaker.** Pre-v1.1.14 panic PINs are stored as a plain Argon2id hex hash. Verification still runs Argon2id, so offline guessing is expensive, but the stored value is a hash rather than a ciphertext and could be reused as a rainbow-table input if the salt were reused (it is not, since each set generates a fresh 16-byte salt). Re-setting the panic password upgrades the storage format to v10 automatically.
 
 ### Against A4: Contact impersonator
 
@@ -201,7 +201,7 @@ The following practices are recommended for users who rely on LANMess for sensit
 
 4. **Configure a panic password if you are at risk of coercion.** The panic password wipes the database; it does not open a decoy vault. If plausible deniability is required, understand that the coercer will see a reset app, not a fake conversation history. Choose a panic password that is different from the unlock PIN, since the two share no storage and nothing prevents them from being identical, but they should be treated as independent secrets.
 
-5. **Re-set the panic password after upgrading from v1.1.12 or earlier.** Pre-v1.1.13 panic PINs are stored as a plain Argon2id hex hash, which is not the new encrypted format. Re-setting the panic password (via the menu, or by clearing and re-entering it) upgrades the storage format to v10 automatically. Verification continues to work for both formats.
+5. **Re-set the panic password after upgrading from v1.1.12 or earlier.** Pre-v1.1.14 panic PINs are stored as a plain Argon2id hex hash, which is not the new encrypted format. Re-setting the panic password (via the menu, or by clearing and re-entering it) upgrades the storage format to v10 automatically. Verification continues to work for both formats.
 
 6. **Enable auto-lock.** Set a timeout that fits how you use the app. The default is 15 minutes.
 

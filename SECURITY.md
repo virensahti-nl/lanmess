@@ -60,7 +60,7 @@ Legacy panic password values from v1.1.12 are hex-encoded Argon2id outputs. `che
 
 ## Blocking
 
-Blocking in v1.1.13 is persistent. When a peer is blocked:
+Blocking in v1.1.14 is persistent. When a peer is blocked:
 
 - Any active chat is stopped.
 - The contact record is marked `blocked = 1`.
@@ -70,7 +70,7 @@ Blocking in v1.1.13 is persistent. When a peer is blocked:
 
 Unblocking removes the entry from the `blocked` table and clears `blocked` on the contact record if one exists. The peer can then be re-added as normal.
 
-Contacts that were auto-blocked by v1.1.11 through no fault of their own, with no audit entry recording a `BLOCKED_LOCAL` event and no pending state, are unblocked automatically on first unlock after the upgrade to v1.1.13. The change is written to the audit chain as `UNBLOCKED_UPGRADE`.
+Contacts that were auto-blocked by v1.1.11 through no fault of their own, with no audit entry recording a `BLOCKED_LOCAL` event and no pending state, are unblocked automatically on first unlock after the upgrade to v1.1.14. The change is written to the audit chain as `UNBLOCKED_UPGRADE`.
 
 ## Reporting an Issue
 

@@ -79,7 +79,7 @@ class HelpScreen(ModalScreen):
                 "  Up/Down    Message history\n"
                 "  PageUp     Load older messages\n"
                 "\n"
-                "Security (v1.1.13):\n"
+                "Security (v1.1.14):\n"
                 "  Per-session X25519 + hash ratchet.\n"
                 "  Ed25519 signatures on every frame\n"
                 "  (including reply and reaction ids).\n"

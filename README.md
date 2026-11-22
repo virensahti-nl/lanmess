@@ -178,7 +178,7 @@ To back up LANMess, copy `~/.lanmess/lanmess.db` (and the `-wal` and `-shm` file
 
 ## Changelog
 
-### v1.1.13
+### v1.1.14
 
 - Stronger PIN policy. A PIN must now contain all four character classes (lowercase, uppercase, digit, symbol), at least 8 distinct characters, no four identical characters in a row, and no pattern that repeats three or more times. Applies at identity creation, migration, and `/changepin`. Unlocking an existing identity is unaffected.
 - Encrypted panic password. The panic password is now stored as `v10:` + Base64 of `nonce || AES-256-GCM(Argon2id(pin, salt), 32-byte marker)` instead of a plain Argon2id hex hash.
